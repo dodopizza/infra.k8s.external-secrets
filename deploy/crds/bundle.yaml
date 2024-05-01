@@ -2110,6 +2110,9 @@ spec:
                                   type: string
                               type: object
                           type: object
+                        folderID:
+                          description: If provided sets the ability to get secrets by its name in the specified folder
+                          type: string
                       required:
                         - auth
                       type: object
@@ -4704,6 +4707,9 @@ spec:
                                   type: string
                               type: object
                           type: object
+                        folderID:
+                          description: If provided sets the ability to get secrets by its name in the specified folder
+                          type: string
                       required:
                         - auth
                       type: object
@@ -4757,6 +4763,9 @@ spec:
                                   type: string
                               type: object
                           type: object
+                        folderID:
+                          description: If provided sets the ability to get secrets by its name in the specified folder
+                          type: string
                       required:
                         - auth
                       type: object
@@ -7455,6 +7464,9 @@ spec:
                                   type: string
                               type: object
                           type: object
+                        folderID:
+                          description: If provided sets the ability to get secrets by its name in the specified folder
+                          type: string
                       required:
                         - auth
                       type: object
@@ -10049,6 +10061,9 @@ spec:
                                   type: string
                               type: object
                           type: object
+                        folderID:
+                          description: If provided sets the ability to get secrets by its name in the specified folder
+                          type: string
                       required:
                         - auth
                       type: object
@@ -10102,6 +10117,9 @@ spec:
                                   type: string
                               type: object
                           type: object
+                        folderID:
+                          description: If provided sets the ability to get secrets by its name in the specified folder
+                          type: string
                       required:
                         - auth
                       type: object

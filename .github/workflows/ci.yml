@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches:
-      - main
-      - release-*
-  pull_request: {}
+      - dodo
+      # - release-*
+  # pull_request: {}
 
 env:
   # Common versions
@@ -138,6 +138,7 @@ jobs:
     if: needs.detect-noop.outputs.noop != 'true'
     uses: ./.github/workflows/publish.yml
     permissions:
+      packages: write
       id-token: write
       contents: read
     strategy:
@@ -148,16 +149,16 @@ jobs:
           build-arch: "amd64 arm64 s390x"
           build-platform: "linux/amd64,linux/arm64,linux/s390x"
           tag-suffix: "" # distroless
-        - dockerfile: "Dockerfile.ubi"
-          build-args: "CGO_ENABLED=0"
-          build-arch: "amd64 arm64"
-          build-platform: "linux/amd64,linux/arm64"
-          tag-suffix: "-ubi"
-        - dockerfile: "Dockerfile.ubi"
-          build-args: "CGO_ENABLED=0 GOEXPERIMENT=boringcrypto"
-          build-arch: "amd64"
-          build-platform: "linux/amd64"
-          tag-suffix: "-ubi-boringssl"
+        # - dockerfile: "Dockerfile.ubi"
+        #   build-args: "CGO_ENABLED=0"
+        #   build-arch: "amd64 arm64"
+        #   build-platform: "linux/amd64,linux/arm64"
+        #   tag-suffix: "-ubi"
+        # - dockerfile: "Dockerfile.ubi"
+        #   build-args: "CGO_ENABLED=0 GOEXPERIMENT=boringcrypto"
+        #   build-arch: "amd64"
+        #   build-platform: "linux/amd64"
+        #   tag-suffix: "-ubi-boringssl"
     with:
       dockerfile: ${{ matrix.dockerfile }}
       tag-suffix: ${{ matrix.tag-suffix }}
@@ -167,6 +168,6 @@ jobs:
       build-arch: ${{ matrix.build-arch }}
       ref: ${{ github.ref }}
     secrets:
-      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      GHCR_USERNAME: ${{ github.actor }}
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
