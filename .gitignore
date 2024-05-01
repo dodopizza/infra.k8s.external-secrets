@@ -11,6 +11,9 @@ cover.out
 # ignore ide files (debug config etc...)
 /.vscode
 /.idea
+__debug_bin*
+.history
+localtest
 
 # helm chart dependencies
 **/charts/*.tgz

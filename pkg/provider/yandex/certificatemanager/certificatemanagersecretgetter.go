@@ -40,8 +40,8 @@ func newCertificateManagerSecretGetter(certificateManagerClient client.Certifica
 	}, nil
 }
 
-func (g *certificateManagerSecretGetter) GetSecret(ctx context.Context, iamToken, resourceID, versionID, property string) ([]byte, error) {
-	response, err := g.certificateManagerClient.GetCertificateContent(ctx, iamToken, resourceID, versionID)
+func (g *certificateManagerSecretGetter) GetSecret(ctx context.Context, iamToken, folderID, resourceID, versionID, property string) ([]byte, error) {
+	response, err := g.certificateManagerClient.GetCertificateContent(ctx, iamToken, folderID, resourceID, versionID)
 	if err != nil {
 		return nil, fmt.Errorf("unable to request certificate content to get secret: %w", err)
 	}
@@ -61,8 +61,8 @@ func (g *certificateManagerSecretGetter) GetSecret(ctx context.Context, iamToken
 	}
 }
 
-func (g *certificateManagerSecretGetter) GetSecretMap(ctx context.Context, iamToken, resourceID, versionID string) (map[string][]byte, error) {
-	response, err := g.certificateManagerClient.GetCertificateContent(ctx, iamToken, resourceID, versionID)
+func (g *certificateManagerSecretGetter) GetSecretMap(ctx context.Context, iamToken, folderID, resourceID, versionID string) (map[string][]byte, error) {
+	response, err := g.certificateManagerClient.GetCertificateContent(ctx, iamToken, folderID, resourceID, versionID)
 	if err != nil {
 		return nil, fmt.Errorf("unable to request certificate content to get secret map: %w", err)
 	}
