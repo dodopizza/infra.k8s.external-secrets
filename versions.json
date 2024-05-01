@@ -5,5 +5,12 @@
     "aliases": [
       "unstable"
     ]
+  },
+  {
+    "version": "v0.9.17",
+    "title": "v0.9.17",
+    "aliases": [
+      "latest"
+    ]
   }
 ]
