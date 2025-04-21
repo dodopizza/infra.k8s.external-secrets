@@ -81,32 +81,62 @@ func (c *grpcLockboxClient) GetSecretIDByName(ctx context.Context, iamToken, fol
 	return "", fmt.Errorf("secret name %s not found in folder %s", secretName, folderID)
 }
 
-func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, folderID, secretID, versionID string) ([]*api.Payload_Entry, error) {
-	secretID_ := secretID
+func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, folderID, secretIDOrName, versionID string) ([]*api.Payload_Entry, error) {
+	secretID := secretIDOrName
+	var payload *api.Payload
 
 	// If the folderID is provided in the SecretStore, we can attempt to retrieve the secret by its name
 	if folderID != "" {
 		var err error
-		secretID_, err = c.GetSecretIDByName(ctx, iamToken, folderID, secretID)
+		secretID, err = c.GetSecretIDByName(ctx, iamToken, folderID, secretIDOrName)
+
+		// Try to get the secret by name
+		response, err := c.lockboxPayloadClient.GetEx(
+			ctx,
+			&api.GetExRequest{
+				Identifier: &api.GetExRequest_FolderAndName{
+					FolderAndName: &api.FolderAndName{
+						FolderId:   folderID,
+						SecretName: secretIDOrName,
+					},
+				},
+				VersionId: versionID,
+			},
+			grpc.PerRPCCredentials(common.PerRPCCredentials{IamToken: iamToken}),
+		)
+		if err == nil {
+			// Convert the response of GetEx method to api.Payload
+			payload = &api.Payload{}
+			payload.VersionId = response.VersionId
+			payload.Entries = []*api.Payload_Entry{}
+			for key, value := range response.Entries {
+				payload.Entries = append(payload.Entries, &api.Payload_Entry{
+					Key:   key,
+					Value: &api.Payload_Entry_TextValue{TextValue: string(value)},
+				})
+			}
+			return payload.Entries, nil
+		}
+
 		if err != nil {
-			if len(secretID) == 20 && strings.HasPrefix(secretID, "e6q") {
-				secretID_ = secretID // Second chance to get the secret by ID
+			if len(secretIDOrName) == 20 && strings.HasPrefix(secretIDOrName, "e6q") {
+				// Try to get the secret by ID
+				payload, err = c.lockboxPayloadClient.Get(
+					ctx,
+					&api.GetPayloadRequest{
+						SecretId:  secretID,
+						VersionId: versionID,
+					},
+					grpc.PerRPCCredentials(common.PerRPCCredentials{IamToken: iamToken}),
+				)
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				return nil, err
 			}
 		}
 	}
 
-	payload, err := c.lockboxPayloadClient.Get(
-		ctx,
-		&api.GetPayloadRequest{
-			SecretId:  secretID_,
-			VersionId: versionID,
-		},
-		grpc.PerRPCCredentials(common.PerRPCCredentials{IamToken: iamToken}),
-	)
-	if err != nil {
-		return nil, err
-	}
 	return payload.Entries, nil
 }
