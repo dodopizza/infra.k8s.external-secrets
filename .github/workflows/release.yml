@@ -8,7 +8,7 @@ on:
         required: true
         default: 'v0.1.1'
       source_ref:
-        description: 'previous version that was released, e.g. v1.5.12 (like v1.5.13 - 1)'
+        description: 'previous version that was released, format `v1.5.12`'
         required: true
         default: 'v0.1.0'
 
