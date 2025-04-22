@@ -6,11 +6,11 @@ on:
       version:
         description: 'version to release, e.g. v1.5.13'
         required: true
-        default: 'v0.1.0'
+        default: 'v0.1.1'
       source_ref:
-        description: 'source ref to publish from. E.g.: main or release-x.y'
+        description: 'previous version that was released, e.g. v1.5.12 (like v1.5.13 - 1)'
         required: true
-        default: 'main'
+        default: 'v0.1.0'
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
