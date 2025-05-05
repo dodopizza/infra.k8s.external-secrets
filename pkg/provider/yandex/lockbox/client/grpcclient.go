@@ -58,6 +58,7 @@ func NewGrpcLockboxClient(ctx context.Context, apiEndpoint string, authorizedKey
 }
 
 func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, folderID, secretIDOrName, versionID string) ([]*api.Payload_Entry, error) {
+	// If the folderID is provided in the SecretStore, we can attempt to retrieve the secret by its name
 	if folderID != "" {
 		payloadEntry, err := c.GetSecretByName(ctx, iamToken, folderID, secretIDOrName, versionID)
 		if err != nil {
