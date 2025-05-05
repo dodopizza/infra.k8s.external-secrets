@@ -59,25 +59,22 @@ func NewGrpcLockboxClient(ctx context.Context, apiEndpoint string, authorizedKey
 }
 
 func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, folderID, secretIDOrName, versionID string) ([]*api.Payload_Entry, error) {
-	return nil, fmt.Errorf("not implemented")
-	//if folderID != "" {
-	//	payloadEntry, err := c.GetSecretByName(ctx, iamToken, folderID, secretIDOrName, versionID)
-	//	if err != nil {
-	//		return nil, fmt.Errorf("method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretByName", folderID, versionID, secretIDOrName)
-	//		//return nil, fmt.Errorf("GetSecretByName")
-	//	}
-	//
-	//	return payloadEntry, nil
-	//}
-	//
-	//// If the folderID is not provided in the SecretStore, we can attempt to retrieve the secret by its ID
-	//payloadEntry, err := c.GetSecretById(ctx, iamToken, secretIDOrName, versionID)
-	//if err != nil {
-	//	return nil, fmt.Errorf("method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretById", folderID, versionID, secretIDOrName)
-	//	//return nil, fmt.Errorf("GetSecretById")
-	//}
-	//
-	//return payloadEntry, nil
+	if folderID != "" {
+		payloadEntry, err := c.GetSecretByName(ctx, iamToken, folderID, secretIDOrName, versionID)
+		if err != nil {
+			return nil, fmt.Errorf("method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretByName", folderID, versionID, secretIDOrName)
+		}
+
+		return payloadEntry, nil
+	}
+
+	// If the folderID is not provided in the SecretStore, we can attempt to retrieve the secret by its ID
+	payloadEntry, err := c.GetSecretById(ctx, iamToken, secretIDOrName, versionID)
+	if err != nil {
+		return nil, fmt.Errorf("method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretById", folderID, versionID, secretIDOrName)
+	}
+
+	return payloadEntry, nil
 }
 
 func (c *grpcLockboxClient) GetSecretByName(ctx context.Context, iamToken, folderID, secretIDOrName, versionID string) ([]*api.Payload_Entry, error) {
