@@ -17,13 +17,11 @@ package client
 import (
 	"context"
 	"fmt"
+	"github.com/external-secrets/external-secrets/pkg/provider/yandex/common"
+	"github.com/keeper-security/secrets-manager-go/core/logger"
 	api "github.com/yandex-cloud/go-genproto/yandex/cloud/lockbox/v1"
 	"github.com/yandex-cloud/go-sdk/iamkey"
 	"google.golang.org/grpc"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"time"
-
-	"github.com/external-secrets/external-secrets/pkg/provider/yandex/common"
 )
 
 // Real/gRPC implementation of LockboxClient.
@@ -62,17 +60,12 @@ func NewGrpcLockboxClient(ctx context.Context, apiEndpoint string, authorizedKey
 }
 
 func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, folderID, secretIDOrName, versionID string) ([]*api.Payload_Entry, error) {
-	// If the folderID is provided in the SecretStore, we can attempt to retrieve the secret by its name
-	logger := ctrl.Log.WithName("grpcclient").WithName("GetPayloadEntries")
 	if folderID != "" {
 		payloadEntry, err := c.GetSecretByName(ctx, iamToken, folderID, secretIDOrName, versionID)
 		if err != nil {
-			logger.Error(err, fmt.Sprintf("Method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretByName", folderID, versionID, secretIDOrName))
-			time.Sleep(10 * time.Second)
-			logger.Error(err, fmt.Sprintf("Method sleep for 10 second. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", "GetSecretByName", folderID, versionID, secretIDOrName))
-			return nil, err
+			logger.Error(err)
+			return nil, fmt.Errorf("method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretByName", folderID, versionID, secretIDOrName)
 		}
-		logger.Info(fmt.Sprintf("Method done with success. Properties are: method: %s, folderId: %s, versionId: %s, secretIdOrName: %s", "GetSecretByName", folderID, versionID, secretIDOrName))
 
 		return payloadEntry, nil
 	}
@@ -80,10 +73,8 @@ func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, fol
 	// If the folderID is not provided in the SecretStore, we can attempt to retrieve the secret by its ID
 	payloadEntry, err := c.GetSecretById(ctx, iamToken, secretIDOrName, versionID)
 	if err != nil {
-		logger.Error(err, fmt.Sprintf("Method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretById", folderID, versionID, secretIDOrName))
-		return nil, err
+		return nil, fmt.Errorf("method done with error - %s. Properties are :method is %s, folderId: %s, versionId: %s, secretIdOrName: %s", err.Error(), "GetSecretById", folderID, versionID, secretIDOrName)
 	}
-	logger.Info(fmt.Sprintf("Method done with success. Properties are: method: %s, folderId: %s, versionId: %s, secretIdOrName: %s", "GetSecretById", folderID, versionID, secretIDOrName))
 
 	return payloadEntry, nil
 }
