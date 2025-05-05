@@ -16,11 +16,10 @@ package client
 
 import (
 	"context"
+	"github.com/external-secrets/external-secrets/pkg/provider/yandex/common"
 	api "github.com/yandex-cloud/go-genproto/yandex/cloud/lockbox/v1"
 	"github.com/yandex-cloud/go-sdk/iamkey"
 	"google.golang.org/grpc"
-
-	"github.com/external-secrets/external-secrets/pkg/provider/yandex/common"
 )
 
 // Real/gRPC implementation of LockboxClient.
@@ -65,6 +64,7 @@ func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, fol
 		if err != nil {
 			return nil, err
 		}
+
 		return payloadEntry, nil
 	}
 
@@ -73,6 +73,7 @@ func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, fol
 	if err != nil {
 		return nil, err
 	}
+
 	return payloadEntry, nil
 }
 
@@ -94,7 +95,7 @@ func (c *grpcLockboxClient) GetSecretByName(ctx context.Context, iamToken, folde
 		return nil, err
 	}
 	// Convert the response of GetEx method to api.Payload
-	payload := &api.Payload{VersionId: response.VersionId, Entries: make([]*api.Payload_Entry, len(response.Entries))}
+	payload := &api.Payload{VersionId: response.VersionId}
 	for key, value := range response.Entries {
 		payload.Entries = append(payload.Entries, &api.Payload_Entry{
 			Key:   key,

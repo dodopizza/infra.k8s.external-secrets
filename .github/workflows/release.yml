@@ -90,7 +90,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Promote Container Image
-        run: make docker.promote
+        run: make docker.build-push
 
       - name: Build release manifests
         run: |
