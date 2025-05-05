@@ -207,7 +207,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	dataMap, err := r.getProviderSecretData(ctx, &externalSecret)
 	if err != nil {
-		r.markAsFailed(log, errGetSecretData, err, &externalSecret, syncCallsError.With(resourceLabels))
+		r.markAsFailed(log, "dima "+errGetSecretData, err, &externalSecret, syncCallsError.With(resourceLabels))
 		return ctrl.Result{}, err
 	}
 
