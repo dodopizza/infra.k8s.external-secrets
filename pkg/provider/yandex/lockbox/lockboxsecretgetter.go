@@ -39,7 +39,7 @@ func newLockboxSecretGetter(lockboxClient client.LockboxClient) (common.SecretGe
 func (g *lockboxSecretGetter) GetSecret(ctx context.Context, iamToken, folderID, resourceID, versionID, property string) ([]byte, error) {
 	entries, err := g.lockboxClient.GetPayloadEntries(ctx, iamToken, folderID, resourceID, versionID)
 	if err != nil {
-		return nil, fmt.Errorf("unable to request secret payload to get secret: %w", err)
+		return nil, fmt.Errorf("unable to request secret payload to get secret qwerty: %w", err)
 	}
 
 	if property == "" {
