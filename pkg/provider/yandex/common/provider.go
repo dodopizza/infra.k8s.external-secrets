@@ -189,7 +189,7 @@ func (p *YandexCloudProvider) getOrCreateIamToken(ctx context.Context, apiEndpoi
 
 	iamTokenKey := buildIamTokenKey(authorizedKey)
 	if iamToken, ok := p.iamTokenMap[iamTokenKey]; !ok || !p.isIamTokenUsable(iamToken) {
-		p.logger.Info("creating IAM token", "authorizedKeyId", authorizedKey.Id)
+		p.logger.Info("creating IAM token qwerty", "authorizedKeyId", authorizedKey.Id)
 
 		iamToken, err := p.newIamTokenFunc(ctx, apiEndpoint, authorizedKey, caCertificate)
 		if err != nil {

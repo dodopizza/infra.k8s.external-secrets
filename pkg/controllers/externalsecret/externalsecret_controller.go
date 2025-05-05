@@ -91,7 +91,6 @@ type Reconciler struct {
 // and updates/creates a Kubernetes secret based on them.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("ExternalSecret", req.NamespacedName)
-	r.markAsFailed(log, "Hello world", fmt.Errorf("Hello world"), &esv1beta1.ExternalSecret{}, nil)
 
 	resourceLabels := ctrlmetrics.RefineNonConditionMetricLabels(map[string]string{"name": req.Name, "namespace": req.Namespace})
 	start := time.Now()
