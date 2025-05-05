@@ -245,11 +245,18 @@ SOURCE_TAG ?= $(VERSION)$(TAG_SUFFIX)
 .PHONY: docker.promote
 docker.promote: ## Build and push the Docker image to the registry
 	@echo "Building Docker image: $(IMAGE_NAME):$(RELEASE_TAG)"
-	docker build -t $(IMAGE_NAME):$(RELEASE_TAG) .
+	docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 -t $(IMAGE_NAME):$(RELEASE_TAG) .
 	@echo "Pushing Docker image: $(IMAGE_NAME):$(RELEASE_TAG)"
 	docker push $(IMAGE_NAME):$(RELEASE_TAG)
 	@echo "Docker image $(IMAGE_NAME):$(RELEASE_TAG) pushed successfully."
 
+.PHONY: docker.build-push
+docker.build-push: ## Build and push the Docker image to the registry
+	@echo "Building Docker image: $(IMAGE_NAME):$(RELEASE_TAG)"
+	docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 -t $(IMAGE_NAME):$(RELEASE_TAG) .
+	@echo "Pushing Docker image: $(IMAGE_NAME):$(RELEASE_TAG)"
+	docker push $(IMAGE_NAME):$(RELEASE_TAG)
+	@echo "Docker image $(IMAGE_NAME):$(RELEASE_TAG) pushed successfully."
 # ====================================================================================
 # Terraform
 
