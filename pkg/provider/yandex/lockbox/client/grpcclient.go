@@ -95,7 +95,7 @@ func (c *grpcLockboxClient) GetSecretByName(ctx context.Context, iamToken, folde
 		return nil, err
 	}
 	// Convert the response of GetEx method to api.Payload
-	payload := &api.Payload{VersionId: response.VersionId, Entries: make([]*api.Payload_Entry, len(response.Entries))}
+	payload := &api.Payload{VersionId: response.VersionId}
 	for key, value := range response.Entries {
 		payload.Entries = append(payload.Entries, &api.Payload_Entry{
 			Key:   key,
