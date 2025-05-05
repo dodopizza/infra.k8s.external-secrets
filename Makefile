@@ -243,16 +243,12 @@ RELEASE_TAG ?= $(IMAGE_TAG)
 SOURCE_TAG ?= $(VERSION)$(TAG_SUFFIX)
 
 .PHONY: docker.promote
-docker.promote: ## Promote the docker image to the registry
-	@$(INFO) promoting $(SOURCE_TAG) to $(RELEASE_TAG)
-	docker manifest inspect --verbose $(IMAGE_NAME):$(SOURCE_TAG) > .tagmanifest
-	for digest in $$(jq -r 'if type=="array" then .[].Descriptor.digest else .Descriptor.digest end' < .tagmanifest); do \
-		docker pull $(IMAGE_NAME)@$$digest; \
-	done
-	docker manifest create $(IMAGE_NAME):$(RELEASE_TAG) \
-		$$(jq -j '"--amend $(IMAGE_NAME)@" + if type=="array" then .[].Descriptor.digest else .Descriptor.digest end + " "' < .tagmanifest)
-	docker manifest push $(IMAGE_NAME):$(RELEASE_TAG)
-	@$(OK) docker push $(RELEASE_TAG) \
+docker.promote: ## Build and push the Docker image to the registry
+	@echo "Building Docker image: $(IMAGE_NAME):$(RELEASE_TAG)"
+	docker build -t $(IMAGE_NAME):$(RELEASE_TAG) .
+	@echo "Pushing Docker image: $(IMAGE_NAME):$(RELEASE_TAG)"
+	docker push $(IMAGE_NAME):$(RELEASE_TAG)
+	@echo "Docker image $(IMAGE_NAME):$(RELEASE_TAG) pushed successfully."
 
 # ====================================================================================
 # Terraform
