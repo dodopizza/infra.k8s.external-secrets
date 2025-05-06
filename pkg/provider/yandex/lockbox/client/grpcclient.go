@@ -69,7 +69,7 @@ func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, fol
 	}
 
 	// If the folderID is not provided in the SecretStore, we can attempt to retrieve the secret by its ID
-	payloadEntry, err := c.GetSecretById(ctx, iamToken, secretIDOrName, versionID)
+	payloadEntry, err := c.GetSecretByID(ctx, iamToken, secretIDOrName, versionID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (c *grpcLockboxClient) GetSecretByName(ctx context.Context, iamToken, folde
 	return payload.Entries, nil
 }
 
-func (c *grpcLockboxClient) GetSecretById(ctx context.Context, iamToken, secretID, versionID string) ([]*api.Payload_Entry, error) {
+func (c *grpcLockboxClient) GetSecretByID(ctx context.Context, iamToken, secretID, versionID string) ([]*api.Payload_Entry, error) {
 	// Try to get the secret by ID
 	payload, err := c.lockboxPayloadClient.Get(
 		ctx,
