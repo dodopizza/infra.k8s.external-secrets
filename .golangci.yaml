@@ -3,6 +3,7 @@ run:
 
 linters-settings:
   gci:
+    skip-generated: true
     sections:
       - "standard"
       - "default"
