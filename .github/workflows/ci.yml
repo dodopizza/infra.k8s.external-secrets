@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - dodo
+      - fix-ci-pipeline
       # - release-*
   # pull_request: {}
 
