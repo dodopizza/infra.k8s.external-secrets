@@ -41,7 +41,7 @@ require (
 	github.com/yandex-cloud/go-sdk v0.0.0-20250320143332-9cbcfc5de4ae
 	github.com/youmark/pkcs8 v0.0.0-20240424034433-3c2c7870ae76
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.31.0
+	golang.org/x/crypto v0.32.0
 	golang.org/x/oauth2 v0.22.0
 	google.golang.org/api v0.193.0
 	google.golang.org/genproto v0.0.0-20240903143218-8af14fe29dc1
@@ -289,8 +289,8 @@ require (
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
 	golang.org/x/mod v0.19.0 // indirect
 	golang.org/x/net v0.33.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/term v0.27.0 // indirect
+	golang.org/x/sys v0.29.0 // indirect
+	golang.org/x/term v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/time v0.6.0 // indirect
 	golang.org/x/tools v0.23.0 // indirect
