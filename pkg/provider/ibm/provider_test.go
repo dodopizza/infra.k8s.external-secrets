@@ -15,8 +15,10 @@ limitations under the License.
 package ibm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -31,7 +33,7 @@ import (
 	utilpointer "k8s.io/utils/ptr"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	v1 "github.com/external-secrets/external-secrets/apis/meta/v1"
 	fakesm "github.com/external-secrets/external-secrets/pkg/provider/ibm/fake"
 )
@@ -51,7 +53,7 @@ type secretManagerTestCase struct {
 	getByNameInput  *sm.GetSecretByNameTypeOptions
 	getByNameOutput sm.SecretIntf
 	getByNameError  error
-	ref             *esv1beta1.ExternalSecretDataRemoteRef
+	ref             *esv1.ExternalSecretDataRemoteRef
 	serviceURL      *string
 	apiErr          error
 	expectError     string
@@ -67,7 +69,7 @@ func makeValidSecretManagerTestCase() *secretManagerTestCase {
 		ref:             makeValidRef(),
 		apiOutput:       makeValidAPIOutput(),
 		getByNameInput:  makeValidGetByNameInput(),
-		getByNameOutput: makeValidGetByNameOutput(),
+		getByNameOutput: makeValidAPIOutput(),
 		getByNameError:  nil,
 		serviceURL:      nil,
 		apiErr:          nil,
@@ -87,8 +89,8 @@ func makeValidSecretManagerTestCase() *secretManagerTestCase {
 	return &smtc
 }
 
-func makeValidRef() *esv1beta1.ExternalSecretDataRemoteRef {
-	return &esv1beta1.ExternalSecretDataRemoteRef{
+func makeValidRef() *esv1.ExternalSecretDataRemoteRef {
+	return &esv1.ExternalSecretDataRemoteRef{
 		Key:     secretUUID,
 		Version: "default",
 	}
@@ -114,16 +116,6 @@ func makeValidGetByNameInput() *sm.GetSecretByNameTypeOptions {
 	return &sm.GetSecretByNameTypeOptions{}
 }
 
-func makeValidGetByNameOutput() sm.SecretIntf {
-	secret := &sm.Secret{
-		SecretType: utilpointer.To(sm.Secret_SecretType_Arbitrary),
-		Name:       utilpointer.To("testyname"),
-		ID:         utilpointer.To(secretUUID),
-	}
-	var i sm.SecretIntf = secret
-	return i
-}
-
 func makeValidSecretManagerTestCaseCustom(tweaks ...func(smtc *secretManagerTestCase)) *secretManagerTestCase {
 	smtc := makeValidSecretManagerTestCase()
 	for _, fn := range tweaks {
@@ -144,28 +136,28 @@ func makeValidSecretManagerTestCaseCustom(tweaks ...func(smtc *secretManagerTest
 // This case can be shared by both GetSecret and GetSecretMap tests.
 // bad case: set apiErr.
 var setAPIErr = func(smtc *secretManagerTestCase) {
-	smtc.apiErr = fmt.Errorf("oh no")
+	smtc.apiErr = errors.New("oh no")
 	smtc.expectError = "oh no"
 }
 
 var setNilMockClient = func(smtc *secretManagerTestCase) {
 	smtc.mockClient = nil
-	smtc.expectError = errUninitalizedIBMProvider
+	smtc.expectError = errUninitializedIBMProvider
 }
 
 // simple tests for Validate Store.
 func TestValidateStore(t *testing.T) {
 	p := providerIBM{}
-	store := &esv1beta1.SecretStore{
-		Spec: esv1beta1.SecretStoreSpec{
-			Provider: &esv1beta1.SecretStoreProvider{
-				IBM: &esv1beta1.IBMProvider{},
+	store := &esv1.SecretStore{
+		Spec: esv1.SecretStoreSpec{
+			Provider: &esv1.SecretStoreProvider{
+				IBM: &esv1.IBMProvider{},
 			},
 		},
 	}
 	_, err := p.ValidateStore(store)
 	if err == nil {
-		t.Errorf(errExpectedErr)
+		t.Error(errExpectedErr)
 	} else if err.Error() != "serviceURL is required" {
 		t.Errorf("service URL test failed")
 	}
@@ -173,12 +165,12 @@ func TestValidateStore(t *testing.T) {
 	store.Spec.Provider.IBM.ServiceURL = &url
 	_, err = p.ValidateStore(store)
 	if err == nil {
-		t.Errorf(errExpectedErr)
+		t.Error(errExpectedErr)
 	} else if err.Error() != "missing auth method" {
 		t.Errorf("KeySelector test failed: expected missing auth method, got %v", err)
 	}
 	ns := "ns-one"
-	store.Spec.Provider.IBM.Auth.SecretRef = &esv1beta1.IBMAuthSecretRef{
+	store.Spec.Provider.IBM.Auth.SecretRef = &esv1.IBMAuthSecretRef{
 		SecretAPIKey: v1.SecretKeySelector{
 			Name:      "foo",
 			Key:       "bar",
@@ -187,19 +179,19 @@ func TestValidateStore(t *testing.T) {
 	}
 	_, err = p.ValidateStore(store)
 	if err == nil {
-		t.Errorf(errExpectedErr)
-	} else if err.Error() != "namespace not allowed with namespaced SecretStore" {
+		t.Error(errExpectedErr)
+	} else if err.Error() != "namespace should either be empty or match the namespace of the SecretStore for a namespaced SecretStore" {
 		t.Errorf("KeySelector test failed: expected namespace not allowed, got %v", err)
 	}
 
 	// add container auth test
-	store = &esv1beta1.SecretStore{
-		Spec: esv1beta1.SecretStoreSpec{
-			Provider: &esv1beta1.SecretStoreProvider{
-				IBM: &esv1beta1.IBMProvider{
+	store = &esv1.SecretStore{
+		Spec: esv1.SecretStoreSpec{
+			Provider: &esv1.SecretStoreProvider{
+				IBM: &esv1.IBMProvider{
 					ServiceURL: &url,
-					Auth: esv1beta1.IBMAuth{
-						ContainerAuth: &esv1beta1.IBMAuthContainerAuth{
+					Auth: esv1.IBMAuth{
+						ContainerAuth: &esv1.IBMAuthContainerAuth{
 							Profile:       "Trusted IAM Profile",
 							TokenLocation: "/a/path/to/nowhere/that/should/exist",
 						},
@@ -776,7 +768,7 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.apiInput.ID = utilpointer.To(secretUUID)
 		smtc.apiOutput = secret
 		smtc.ref.Key = secretUUID
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyFetch
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyFetch
 		smtc.expectedData = map[string][]byte{
 			"arbitrary":       []byte(payload),
 			"created_at":      []byte(timeValue),
@@ -808,7 +800,7 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.apiInput.ID = utilpointer.To(secretUUID)
 		smtc.apiOutput = secret
 		smtc.ref.Key = iamCredentialsSecret + secretUUID
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyFetch
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyFetch
 		smtc.expectedData = map[string][]byte{
 			"api_key":         []byte(secretAPIKey),
 			"apikey":          []byte(secretAPIKey),
@@ -845,7 +837,7 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.ref.Key = "username_password/" + secretUUID
 		smtc.expectedData["username"] = []byte(secretUsername)
 		smtc.expectedData["password"] = []byte(secretPassword)
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyFetch
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyFetch
 		smtc.expectedData = map[string][]byte{
 			"created_at":      []byte(timeValue),
 			"created_by":      []byte(*secret.CreatedBy),
@@ -881,29 +873,22 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.apiOutput = secret
 		smtc.ref.Key = "imported_cert" + "/" + secretUUID
 
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyFetch
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyFetch
 		smtc.expectedData = map[string][]byte{
-			"certificate":           []byte(secretCertificate),
-			"created_at":            []byte(timeValue),
-			"created_by":            []byte(*secret.CreatedBy),
-			"crn":                   []byte(nilValue),
-			"downloaded":            []byte(strconv.FormatBool(*secret.Downloaded)),
-			"expiration_date":       []byte(nilValue),
-			"id":                    []byte(nilValue),
-			"intermediate":          []byte(secretIntermediate),
-			"intermediate_included": []byte(nilValue),
-			"issuer":                []byte(nilValue),
-			"labels":                []byte("[" + strings.Join(secret.Labels, " ") + "]"),
-			"locks_total":           []byte(strconv.Itoa(int(*secret.LocksTotal))),
-			"private_key":           []byte(secretPrivateKey),
-			"private_key_included":  []byte(nilValue),
-			"secret_group_id":       []byte(nilValue),
-			"secret_type":           []byte(nilValue),
-			"serial_number":         []byte(nilValue),
-			"signing_algorithm":     []byte(nilValue),
-			"updated_at":            []byte(nilValue),
-			"validity":              []byte(nilValue),
-			"versions_total":        []byte(nilValue),
+			"certificate":     []byte(secretCertificate),
+			"created_at":      []byte(timeValue),
+			"created_by":      []byte(*secret.CreatedBy),
+			"crn":             []byte(nilValue),
+			"downloaded":      []byte(strconv.FormatBool(*secret.Downloaded)),
+			"id":              []byte(nilValue),
+			"intermediate":    []byte(secretIntermediate),
+			"labels":          []byte("[" + strings.Join(secret.Labels, " ") + "]"),
+			"locks_total":     []byte(strconv.Itoa(int(*secret.LocksTotal))),
+			"private_key":     []byte(secretPrivateKey),
+			"secret_group_id": []byte(nilValue),
+			"secret_type":     []byte(nilValue),
+			"updated_at":      []byte(nilValue),
+			"versions_total":  []byte(nilValue),
 		}
 	}
 
@@ -947,10 +932,9 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.apiOutput = secret
 		smtc.ref.Key = "public_cert" + "/" + secretUUID
 
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyFetch
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyFetch
 		smtc.expectedData = map[string][]byte{
 			"certificate":     []byte(secretCertificate),
-			"common_name":     []byte(nilValue),
 			"created_at":      []byte(timeValue),
 			"created_by":      []byte(*secret.CreatedBy),
 			"crn":             []byte(nilValue),
@@ -984,7 +968,7 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.apiInput.ID = utilpointer.To(secretUUID)
 		smtc.apiOutput = secret
 		smtc.ref.Key = "private_cert" + "/" + secretUUID
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyFetch
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyFetch
 		smtc.expectedData = map[string][]byte{
 			"certificate":          []byte(secretCertificate),
 			"certificate_template": []byte(nilValue),
@@ -1023,7 +1007,7 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.apiInput.ID = core.StringPtr(secretUUID)
 		smtc.apiOutput = secret
 		smtc.ref.Key = "kv/" + secretUUID
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyFetch
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyFetch
 		smtc.expectedData = map[string][]byte{
 			"created_at":      []byte(timeValue),
 			"created_by":      []byte(*secret.CreatedBy),
@@ -1057,7 +1041,7 @@ func TestGetSecretMap(t *testing.T) {
 		smtc.apiInput.ID = utilpointer.To(secretUUID)
 		smtc.apiOutput = secret
 		smtc.ref.Key = iamCredentialsSecret + secretUUID
-		smtc.ref.MetadataPolicy = esv1beta1.ExternalSecretMetadataPolicyNone
+		smtc.ref.MetadataPolicy = esv1.ExternalSecretMetadataPolicyNone
 		smtc.expectedData = map[string][]byte{
 			"apikey": []byte(secretAPIKey),
 		}
@@ -1166,6 +1150,20 @@ func TestGetSecretMap(t *testing.T) {
 				t.Errorf("unexpected error: %s, expected: '%s'", err.Error(), v.expectError)
 			}
 			if err == nil && !reflect.DeepEqual(out, v.expectedData) {
+				// Add some debug logs because t.Errorf is hard to debug at a glance.
+				for k, val := range out {
+					if val2, ok := v.expectedData[k]; !ok {
+						t.Logf("%s was not in expected data\n", k)
+					} else if !bytes.Equal(val2, val) {
+						fmt.Printf("%s did not equal expected value: %s\n", string(val), string(val2))
+					}
+				}
+
+				for k := range v.expectedData {
+					if _, ok := out[k]; !ok {
+						t.Logf("%s expected key was not in out\n", k)
+					}
+				}
 				t.Errorf("unexpected secret data: expected:\n%+v\ngot:\n%+v", v.expectedData, out)
 			}
 		})
@@ -1178,12 +1176,12 @@ func TestValidRetryInput(t *testing.T) {
 	invalid := "Invalid"
 	serviceURL := "http://fake-service-url.cool"
 
-	spec := &esv1beta1.SecretStore{
-		Spec: esv1beta1.SecretStoreSpec{
-			Provider: &esv1beta1.SecretStoreProvider{
-				IBM: &esv1beta1.IBMProvider{
-					Auth: esv1beta1.IBMAuth{
-						SecretRef: &esv1beta1.IBMAuthSecretRef{
+	spec := &esv1.SecretStore{
+		Spec: esv1.SecretStoreSpec{
+			Provider: &esv1.SecretStoreProvider{
+				IBM: &esv1.IBMProvider{
+					Auth: esv1.IBMAuth{
+						SecretRef: &esv1.IBMAuthSecretRef{
 							SecretAPIKey: v1.SecretKeySelector{
 								Name: "fake-secret",
 								Key:  "fake-key",
@@ -1193,7 +1191,7 @@ func TestValidRetryInput(t *testing.T) {
 					ServiceURL: &serviceURL,
 				},
 			},
-			RetrySettings: &esv1beta1.SecretStoreRetrySettings{
+			RetrySettings: &esv1.SecretStoreRetrySettings{
 				RetryInterval: &invalid,
 			},
 		},

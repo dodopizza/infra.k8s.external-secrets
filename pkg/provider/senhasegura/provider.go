@@ -16,19 +16,20 @@ package senhasegura
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	senhaseguraAuth "github.com/external-secrets/external-secrets/pkg/provider/senhasegura/auth"
 	"github.com/external-secrets/external-secrets/pkg/provider/senhasegura/dsm"
 )
 
 // https://github.com/external-secrets/external-secrets/issues/644
-var _ esv1beta1.Provider = &Provider{}
+var _ esv1.Provider = &Provider{}
 
 // Provider struct that satisfier ESO interface.
 type Provider struct{}
@@ -45,14 +46,14 @@ const (
 )
 
 // Capabilities return the provider supported capabilities (ReadOnly, WriteOnly, ReadWrite).
-func (p *Provider) Capabilities() esv1beta1.SecretStoreCapabilities {
-	return esv1beta1.SecretStoreReadOnly
+func (p *Provider) Capabilities() esv1.SecretStoreCapabilities {
+	return esv1.SecretStoreReadOnly
 }
 
 /*
 Construct a new secrets client based on provided store.
 */
-func (p *Provider) NewClient(ctx context.Context, store esv1beta1.GenericStore, kube client.Client, namespace string) (esv1beta1.SecretsClient, error) {
+func (p *Provider) NewClient(ctx context.Context, store esv1.GenericStore, kube client.Client, namespace string) (esv1.SecretsClient, error) {
 	spec := store.GetSpec()
 	provider := spec.Provider.Senhasegura
 
@@ -61,7 +62,7 @@ func (p *Provider) NewClient(ctx context.Context, store esv1beta1.GenericStore, 
 		return nil, err
 	}
 
-	if provider.Module == esv1beta1.SenhaseguraModuleDSM {
+	if provider.Module == esv1.SenhaseguraModuleDSM {
 		return dsm.New(isoSession)
 	}
 
@@ -71,22 +72,22 @@ func (p *Provider) NewClient(ctx context.Context, store esv1beta1.GenericStore, 
 // Validate store using Validating webhook during secret store creating
 // Checks here are usually the best experience for the user, as the SecretStore will not be created until it is a 'valid' one.
 // https://github.com/external-secrets/external-secrets/pull/830#discussion_r833278518
-func (p *Provider) ValidateStore(store esv1beta1.GenericStore) (admission.Warnings, error) {
+func (p *Provider) ValidateStore(store esv1.GenericStore) (admission.Warnings, error) {
 	return nil, validateStore(store)
 }
 
-func validateStore(store esv1beta1.GenericStore) error {
+func validateStore(store esv1.GenericStore) error {
 	if store == nil {
-		return fmt.Errorf(errNilStore)
+		return errors.New(errNilStore)
 	}
 
 	spec := store.GetSpec()
 	if spec == nil {
-		return fmt.Errorf(errMissingStoreSpec)
+		return errors.New(errMissingStoreSpec)
 	}
 
 	if spec.Provider == nil {
-		return fmt.Errorf(errMissingProvider)
+		return errors.New(errMissingProvider)
 	}
 
 	provider := spec.Provider.Senhasegura
@@ -96,21 +97,21 @@ func validateStore(store esv1beta1.GenericStore) error {
 
 	url, err := url.Parse(provider.URL)
 	if err != nil {
-		return fmt.Errorf(errInvalidSenhaseguraURL)
+		return errors.New(errInvalidSenhaseguraURL)
 	}
 
 	// senhasegura doesn't accept requests without SSL/TLS layer for security reasons
 	// DSM doesn't provides gRPC schema, only HTTPS
 	if url.Scheme != "https" {
-		return fmt.Errorf(errInvalidSenhaseguraURLHTTPS)
+		return errors.New(errInvalidSenhaseguraURLHTTPS)
 	}
 
 	if url.Host == "" {
-		return fmt.Errorf(errInvalidSenhaseguraURL)
+		return errors.New(errInvalidSenhaseguraURL)
 	}
 
 	if provider.Auth.ClientID == "" {
-		return fmt.Errorf(errMissingClientID)
+		return errors.New(errMissingClientID)
 	}
 
 	return nil
@@ -120,7 +121,7 @@ func validateStore(store esv1beta1.GenericStore) error {
 Register SenhaseguraProvider in ESO init.
 */
 func init() {
-	esv1beta1.Register(&Provider{}, &esv1beta1.SecretStoreProvider{
-		Senhasegura: &esv1beta1.SenhaseguraProvider{},
-	})
+	esv1.Register(&Provider{}, &esv1.SecretStoreProvider{
+		Senhasegura: &esv1.SenhaseguraProvider{},
+	}, esv1.MaintenanceStatusMaintained)
 }

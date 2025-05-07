@@ -25,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	pointer "k8s.io/utils/ptr"
 
+	"github.com/external-secrets/external-secrets/pkg/constants"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -126,7 +128,7 @@ var _ = Describe("ValidatingWebhookConfig reconcile", Ordered, func() {
 	}
 
 	IgnoreNoMatch := func(tc *testCase) {
-		delete(tc.vwc.ObjectMeta.Labels, wellKnownLabelKey)
+		delete(tc.vwc.ObjectMeta.Labels, constants.WellKnownLabelKey)
 		tc.assert = func() {
 			Consistently(func() bool {
 				var vwc admissionregistration.ValidatingWebhookConfiguration
@@ -168,7 +170,7 @@ var _ = Describe("ValidatingWebhookConfig reconcile", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 		}()
 		tc.assert = func() {
-
+			var resourceVersion string
 			Eventually(func() bool {
 				var vwc admissionregistration.ValidatingWebhookConfiguration
 				err := k8sClient.Get(context.Background(), types.NamespacedName{
@@ -191,11 +193,26 @@ var _ = Describe("ValidatingWebhookConfig reconcile", Ordered, func() {
 						return false
 					}
 				}
+				resourceVersion = vwc.ResourceVersion
 				return true
 			}).
 				WithTimeout(time.Second * 10).
 				WithPolling(time.Second).
 				Should(BeTrue())
+
+			// make sure no additional updates are made
+			Consistently(func() bool {
+				var vwc admissionregistration.ValidatingWebhookConfiguration
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Name: tc.vwc.Name}, &vwc)
+				if err != nil {
+					return false
+				}
+				return vwc.ResourceVersion == resourceVersion
+			}).
+				WithTimeout(time.Second * 10).
+				WithPolling(time.Second).
+				Should(BeTrue())
+
 		}
 	}
 
@@ -232,7 +249,7 @@ func makeValidatingWebhookConfig() *admissionregistration.ValidatingWebhookConfi
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "name-shouldnt-matter",
 			Labels: map[string]string{
-				wellKnownLabelKey: wellKnownLabelValue,
+				constants.WellKnownLabelKey: constants.WellKnownLabelValueWebhook,
 			},
 		},
 		Webhooks: []admissionregistration.ValidatingWebhook{

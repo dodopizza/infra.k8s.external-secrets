@@ -22,13 +22,15 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/golang-jwt/jwt/v4"
 	vault "github.com/hashicorp/vault/api"
@@ -273,7 +275,9 @@ func (l *Vault) configureVault() error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() {
+		_ = res.Body.Close()
+	}()
 	sec, err := vault.ParseSecret(res.Body)
 	if err != nil {
 		return err
@@ -287,7 +291,9 @@ func (l *Vault) configureVault() error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() {
+		_ = res.Body.Close()
+	}()
 	sec, err = vault.ParseSecret(res.Body)
 	if err != nil {
 		return err
@@ -320,7 +326,7 @@ func genVaultCertificates(namespace string) ([]byte, []byte, []byte, []byte, []b
 		"vault-" + namespace,
 		fmt.Sprintf("vault-%s.%s.svc.cluster.local", namespace, namespace)})
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("unable to generate vault server cert")
+		return nil, nil, nil, nil, nil, nil, errors.New("unable to generate vault server cert")
 	}
 	serverKeyPem := pem.EncodeToMemory(&pem.Block{
 		Type:  privatePemType,
@@ -333,7 +339,7 @@ func genVaultCertificates(namespace string) ([]byte, []byte, []byte, []byte, []b
 	}
 	clientPem, clientKey, err := genPeerCert(clientRootCert, clientRootKey, "vault-client", nil)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("unable to generate vault server cert")
+		return nil, nil, nil, nil, nil, nil, errors.New("unable to generate vault server cert")
 	}
 	clientKeyPem := pem.EncodeToMemory(&pem.Block{
 		Type:  privatePemType,

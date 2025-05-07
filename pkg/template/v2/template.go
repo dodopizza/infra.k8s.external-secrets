@@ -20,10 +20,12 @@ import (
 	tpl "text/template"
 
 	"github.com/Masterminds/sprig/v3"
+	"github.com/spf13/pflag"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
-	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
+	"github.com/external-secrets/external-secrets/pkg/feature"
 )
 
 var tplFuncs = tpl.FuncMap{
@@ -32,10 +34,13 @@ var tplFuncs = tpl.FuncMap{
 	"pkcs12cert":     pkcs12cert,
 	"pkcs12certPass": pkcs12certPass,
 
-	"pemToPkcs12":     pemToPkcs12,
-	"pemToPkcs12Pass": pemToPkcs12Pass,
+	"pemToPkcs12":         pemToPkcs12,
+	"pemToPkcs12Pass":     pemToPkcs12Pass,
+	"fullPemToPkcs12":     fullPemToPkcs12,
+	"fullPemToPkcs12Pass": fullPemToPkcs12Pass,
 
-	"filterPEM": filterPEM,
+	"filterPEM":       filterPEM,
+	"filterCertChain": filterCertChain,
 
 	"jwkPublicKeyPem":  jwkPublicKeyPem,
 	"jwkPrivateKeyPem": jwkPrivateKeyPem,
@@ -43,6 +48,8 @@ var tplFuncs = tpl.FuncMap{
 	"toYaml":   toYAML,
 	"fromYaml": fromYAML,
 }
+
+var leftDelim, rightDelim string
 
 // So other templating calls can use the same extra functions.
 func FuncMap() tpl.FuncMap {
@@ -57,6 +64,7 @@ const (
 	errParsePrivKey         = "unable to parse private key type"
 
 	pemTypeCertificate = "CERTIFICATE"
+	pemTypeKey         = "PRIVATE KEY"
 )
 
 func init() {
@@ -67,15 +75,30 @@ func init() {
 	for k, v := range sprigFuncs {
 		tplFuncs[k] = v
 	}
+	fs := pflag.NewFlagSet("template", pflag.ExitOnError)
+	fs.StringVar(&leftDelim, "template-left-delimiter", "{{", "templating left delimiter")
+	fs.StringVar(&rightDelim, "template-right-delimiter", "}}", "templating right delimiter")
+	feature.Register(feature.Feature{
+		Flags: fs,
+	})
 }
 
 func applyToTarget(k, val string, target esapi.TemplateTarget, secret *corev1.Secret) {
 	switch target {
 	case esapi.TemplateTargetAnnotations:
+		if secret.Annotations == nil {
+			secret.Annotations = make(map[string]string)
+		}
 		secret.Annotations[k] = val
 	case esapi.TemplateTargetLabels:
+		if secret.Labels == nil {
+			secret.Labels = make(map[string]string)
+		}
 		secret.Labels[k] = val
 	case esapi.TemplateTargetData:
+		if secret.Data == nil {
+			secret.Data = make(map[string][]byte)
+		}
 		secret.Data[k] = []byte(val)
 	default:
 	}
@@ -139,7 +162,9 @@ func execute(k, val string, data map[string][]byte) ([]byte, error) {
 	}
 
 	t, err := tpl.New(k).
+		Option("missingkey=error").
 		Funcs(tplFuncs).
+		Delims("{{", "}}").
 		Parse(val)
 	if err != nil {
 		return nil, fmt.Errorf(errParse, k, err)

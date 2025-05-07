@@ -16,12 +16,12 @@ package vault
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 
-	approle "github.com/hashicorp/vault/api/auth/approle"
+	"github.com/hashicorp/vault/api/auth/approle"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	"github.com/external-secrets/external-secrets/pkg/constants"
 	"github.com/external-secrets/external-secrets/pkg/metrics"
 	"github.com/external-secrets/external-secrets/pkg/utils/resolvers"
@@ -43,7 +43,7 @@ func setAppRoleToken(ctx context.Context, v *client) (bool, error) {
 	return false, nil
 }
 
-func (c *client) requestTokenWithAppRoleRef(ctx context.Context, appRole *esv1beta1.VaultAppRole) error {
+func (c *client) requestTokenWithAppRoleRef(ctx context.Context, appRole *esv1.VaultAppRole) error {
 	var err error
 	var roleID string // becomes the RoleID used to authenticate with HashiCorp Vault
 
@@ -56,7 +56,7 @@ func (c *client) requestTokenWithAppRoleRef(ctx context.Context, appRole *esv1be
 			return err
 		}
 	} else { // we ran out of ways to get RoleID. return an appropriate error
-		return fmt.Errorf(errInvalidAppRoleID)
+		return errors.New(errInvalidAppRoleID)
 	}
 
 	secretID, err := resolvers.SecretKeyRef(ctx, c.kube, c.storeKind, c.namespace, &appRole.SecretRef)

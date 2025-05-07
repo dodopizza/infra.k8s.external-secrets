@@ -17,7 +17,7 @@ package webhookconfig
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -26,6 +26,7 @@ import (
 	"github.com/go-logr/logr"
 	admissionregistration "k8s.io/api/admissionregistration/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,6 +34,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+
+	"github.com/external-secrets/external-secrets/pkg/constants"
 )
 
 type Reconciler struct {
@@ -55,18 +58,24 @@ type Reconciler struct {
 	webhookReady   bool
 }
 
-func New(k8sClient client.Client, scheme *runtime.Scheme, leaderChan <-chan struct{},
-	log logr.Logger, svcName, svcNamespace, secretName, secretNamespace string,
-	requeueInterval time.Duration) *Reconciler {
+type Opts struct {
+	SvcName         string
+	SvcNamespace    string
+	SecretName      string
+	SecretNamespace string
+	RequeueInterval time.Duration
+}
+
+func New(k8sClient client.Client, scheme *runtime.Scheme, leaderChan <-chan struct{}, log logr.Logger, opts Opts) *Reconciler {
 	return &Reconciler{
 		Client:          k8sClient,
 		Scheme:          scheme,
 		Log:             log,
-		RequeueDuration: requeueInterval,
-		SvcName:         svcName,
-		SvcNamespace:    svcNamespace,
-		SecretName:      secretName,
-		SecretNamespace: secretNamespace,
+		RequeueDuration: opts.RequeueInterval,
+		SvcName:         opts.SvcName,
+		SvcNamespace:    opts.SvcNamespace,
+		SecretName:      opts.SecretName,
+		SecretNamespace: opts.SecretNamespace,
 		leaderChan:      leaderChan,
 		leaderElected:   false,
 		webhookReadyMu:  &sync.Mutex{},
@@ -75,9 +84,6 @@ func New(k8sClient client.Client, scheme *runtime.Scheme, leaderChan <-chan stru
 }
 
 const (
-	wellKnownLabelKey   = "external-secrets.io/component"
-	wellKnownLabelValue = "webhook"
-
 	ReasonUpdateFailed   = "UpdateFailed"
 	errWebhookNotReady   = "webhook not ready"
 	errSubsetsNotReady   = "subsets not ready"
@@ -98,13 +104,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	if cfg.Labels[wellKnownLabelKey] != wellKnownLabelValue {
-		log.Info("ignoring webhook due to missing labels", wellKnownLabelKey, wellKnownLabelValue)
+	if cfg.Labels[constants.WellKnownLabelKey] != constants.WellKnownLabelValueWebhook {
+		log.Info("ignoring webhook due to missing labels", constants.WellKnownLabelKey, constants.WellKnownLabelValueWebhook)
 		return ctrl.Result{}, nil
 	}
 
 	log.Info("updating webhook config")
-	err = r.updateConfig(ctx, &cfg)
+	err = r.updateConfig(logr.NewContext(ctx, log), &cfg)
 	if err != nil {
 		log.Error(err, "could not update webhook config")
 		r.recorder.Eventf(&cfg, v1.EventTypeWarning, ReasonUpdateFailed, err.Error())
@@ -112,7 +118,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			RequeueAfter: time.Minute,
 		}, err
 	}
-	log.Info("updated webhook config")
 
 	// right now we only have one single
 	// webhook config we care about
@@ -146,7 +151,7 @@ func (r *Reconciler) ReadyCheck(_ *http.Request) error {
 	r.webhookReadyMu.Lock()
 	defer r.webhookReadyMu.Unlock()
 	if !r.webhookReady {
-		return fmt.Errorf(errWebhookNotReady)
+		return errors.New(errWebhookNotReady)
 	}
 	var eps v1.Endpoints
 	err := r.Get(context.TODO(), types.NamespacedName{
@@ -157,16 +162,19 @@ func (r *Reconciler) ReadyCheck(_ *http.Request) error {
 		return err
 	}
 	if len(eps.Subsets) == 0 {
-		return fmt.Errorf(errSubsetsNotReady)
+		return errors.New(errSubsetsNotReady)
 	}
 	if len(eps.Subsets[0].Addresses) == 0 {
-		return fmt.Errorf(errAddressesNotReady)
+		return errors.New(errAddressesNotReady)
 	}
 	return nil
 }
 
 // reads the ca cert and updates the webhook config.
 func (r *Reconciler) updateConfig(ctx context.Context, cfg *admissionregistration.ValidatingWebhookConfiguration) error {
+	log := logr.FromContextOrDiscard(ctx)
+	before := cfg.DeepCopyObject()
+
 	secret := v1.Secret{}
 	secretName := types.NamespacedName{
 		Name:      r.SecretName,
@@ -179,15 +187,23 @@ func (r *Reconciler) updateConfig(ctx context.Context, cfg *admissionregistratio
 
 	crt, ok := secret.Data[caCertName]
 	if !ok {
-		return fmt.Errorf(errCACertNotReady)
+		return errors.New(errCACertNotReady)
 	}
-	if err := r.inject(cfg, r.SvcName, r.SvcNamespace, crt); err != nil {
-		return err
+
+	r.inject(cfg, r.SvcName, r.SvcNamespace, crt)
+
+	if !equality.Semantic.DeepEqual(before, cfg) {
+		if err := r.Update(ctx, cfg); err != nil {
+			return err
+		}
+		log.Info("updated webhook config")
+		return nil
 	}
-	return r.Update(ctx, cfg)
+	log.V(1).Info("webhook config unchanged")
+	return nil
 }
 
-func (r *Reconciler) inject(cfg *admissionregistration.ValidatingWebhookConfiguration, svcName, svcNamespace string, certData []byte) error {
+func (r *Reconciler) inject(cfg *admissionregistration.ValidatingWebhookConfiguration, svcName, svcNamespace string, certData []byte) {
 	r.Log.Info("injecting ca certificate and service names", "cacrt", base64.StdEncoding.EncodeToString(certData), "name", cfg.Name)
 	for idx, w := range cfg.Webhooks {
 		if !strings.HasSuffix(w.Name, "external-secrets.io") {
@@ -199,5 +215,4 @@ func (r *Reconciler) inject(cfg *admissionregistration.ValidatingWebhookConfigur
 		cfg.Webhooks[idx].ClientConfig.Service.Namespace = svcNamespace
 		cfg.Webhooks[idx].ClientConfig.CABundle = certData
 	}
-	return nil
 }

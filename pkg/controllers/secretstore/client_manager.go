@@ -16,7 +16,9 @@ package secretstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -27,13 +29,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 )
 
 const (
 	errGetClusterSecretStore = "could not get ClusterSecretStore %q, %w"
 	errGetSecretStore        = "could not get SecretStore %q, %w"
-	errSecretStoreNotReady   = "the desired SecretStore %s is not ready"
+	errSecretStoreNotReady   = "%s %q is not ready"
 	errClusterStoreMismatch  = "using cluster store %q is not allowed from namespace %q: denied by spec.condition"
 )
 
@@ -57,8 +59,8 @@ type clientKey struct {
 }
 
 type clientVal struct {
-	client esv1beta1.SecretsClient
-	store  esv1beta1.GenericStore
+	client esv1.SecretsClient
+	store  esv1.GenericStore
 }
 
 // NewManager constructs a new manager with defaults.
@@ -73,8 +75,8 @@ func NewManager(ctrlClient client.Client, controllerClass string, enableFloodgat
 	}
 }
 
-func (m *Manager) GetFromStore(ctx context.Context, store esv1beta1.GenericStore, namespace string) (esv1beta1.SecretsClient, error) {
-	storeProvider, err := esv1beta1.GetProvider(store)
+func (m *Manager) GetFromStore(ctx context.Context, store esv1.GenericStore, namespace string) (esv1.SecretsClient, error) {
+	storeProvider, err := esv1.GetProvider(store)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +105,7 @@ func (m *Manager) GetFromStore(ctx context.Context, store esv1beta1.GenericStore
 // while sourceRef.SecretStoreRef takes precedence over storeRef.
 // Do not close the client returned from this func, instead close
 // the manager once you're done with recinciling the external secret.
-func (m *Manager) Get(ctx context.Context, storeRef esv1beta1.SecretStoreRef, namespace string, sourceRef *esv1beta1.StoreGeneratorSourceRef) (esv1beta1.SecretsClient, error) {
+func (m *Manager) Get(ctx context.Context, storeRef esv1.SecretStoreRef, namespace string, sourceRef *esv1.StoreGeneratorSourceRef) (esv1.SecretsClient, error) {
 	if sourceRef != nil && sourceRef.SecretStoreRef != nil {
 		storeRef = *sourceRef.SecretStoreRef
 	}
@@ -113,7 +115,7 @@ func (m *Manager) Get(ctx context.Context, storeRef esv1beta1.SecretStoreRef, na
 	}
 	// check if store should be handled by this controller instance
 	if !ShouldProcessStore(store, m.controllerClass) {
-		return nil, fmt.Errorf("can not reference unmanaged store")
+		return nil, errors.New("can not reference unmanaged store")
 	}
 	// when using ClusterSecretStore, validate the ClusterSecretStore namespace conditions
 	shouldProcess, err := m.shouldProcessSecret(store, namespace)
@@ -136,7 +138,7 @@ func (m *Manager) Get(ctx context.Context, storeRef esv1beta1.SecretStoreRef, na
 // returns a previously stored client from the cache if store and store-version match
 // if a client exists for the same provider which points to a different store or store version
 // it will be cleaned up.
-func (m *Manager) getStoredClient(ctx context.Context, storeProvider esv1beta1.Provider, store esv1beta1.GenericStore) esv1beta1.SecretsClient {
+func (m *Manager) getStoredClient(ctx context.Context, storeProvider esv1.Provider, store esv1.GenericStore) esv1.SecretsClient {
 	idx := storeKey(storeProvider)
 	val, ok := m.clientMap[idx]
 	if !ok {
@@ -158,12 +160,12 @@ func (m *Manager) getStoredClient(ctx context.Context, storeProvider esv1beta1.P
 		"store", storeName)
 	// if we have a client, but it points to a different store
 	// we must clean it up
-	val.client.Close(ctx)
+	_ = val.client.Close(ctx)
 	delete(m.clientMap, idx)
 	return nil
 }
 
-func storeKey(storeProvider esv1beta1.Provider) clientKey {
+func storeKey(storeProvider esv1.Provider) clientKey {
 	return clientKey{
 		providerType: fmt.Sprintf("%T", storeProvider),
 	}
@@ -171,12 +173,12 @@ func storeKey(storeProvider esv1beta1.Provider) clientKey {
 
 // getStore fetches the (Cluster)SecretStore from the kube-apiserver
 // and returns a GenericStore representing it.
-func (m *Manager) getStore(ctx context.Context, storeRef *esv1beta1.SecretStoreRef, namespace string) (esv1beta1.GenericStore, error) {
+func (m *Manager) getStore(ctx context.Context, storeRef *esv1.SecretStoreRef, namespace string) (esv1.GenericStore, error) {
 	ref := types.NamespacedName{
 		Name: storeRef.Name,
 	}
-	if storeRef.Kind == esv1beta1.ClusterSecretStoreKind {
-		var store esv1beta1.ClusterSecretStore
+	if storeRef.Kind == esv1.ClusterSecretStoreKind {
+		var store esv1.ClusterSecretStore
 		err := m.client.Get(ctx, ref, &store)
 		if err != nil {
 			return nil, fmt.Errorf(errGetClusterSecretStore, ref.Name, err)
@@ -184,7 +186,7 @@ func (m *Manager) getStore(ctx context.Context, storeRef *esv1beta1.SecretStoreR
 		return &store, nil
 	}
 	ref.Namespace = namespace
-	var store esv1beta1.SecretStore
+	var store esv1.SecretStore
 	err := m.client.Get(ctx, ref, &store)
 	if err != nil {
 		return nil, fmt.Errorf(errGetSecretStore, ref.Name, err)
@@ -208,8 +210,8 @@ func (m *Manager) Close(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) shouldProcessSecret(store esv1beta1.GenericStore, ns string) (bool, error) {
-	if store.GetKind() != esv1beta1.ClusterSecretStoreKind {
+func (m *Manager) shouldProcessSecret(store esv1.GenericStore, ns string) (bool, error) {
+	if store.GetKind() != esv1.ClusterSecretStoreKind {
 		return true, nil
 	}
 
@@ -245,19 +247,31 @@ func (m *Manager) shouldProcessSecret(store esv1beta1.GenericStore, ns string) (
 				return true, nil
 			}
 		}
+
+		for _, reg := range condition.NamespaceRegexes {
+			match, err := regexp.MatchString(reg, ns)
+			if err != nil {
+				// Should not happen since store validation already verified the regexes.
+				return false, fmt.Errorf("failed to compile regex %v: %w", reg, err)
+			}
+
+			if match {
+				return true, nil
+			}
+		}
 	}
 
 	return false, nil
 }
 
 // assertStoreIsUsable assert that the store is ready to use.
-func assertStoreIsUsable(store esv1beta1.GenericStore) error {
+func assertStoreIsUsable(store esv1.GenericStore) error {
 	if store == nil {
 		return nil
 	}
-	condition := GetSecretStoreCondition(store.GetStatus(), esv1beta1.SecretStoreReady)
+	condition := GetSecretStoreCondition(store.GetStatus(), esv1.SecretStoreReady)
 	if condition == nil || condition.Status != v1.ConditionTrue {
-		return fmt.Errorf(errSecretStoreNotReady, store.GetName())
+		return fmt.Errorf(errSecretStoreNotReady, store.GetKind(), store.GetName())
 	}
 	return nil
 }

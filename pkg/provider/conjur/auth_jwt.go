@@ -16,17 +16,13 @@ package conjur
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
+	"errors"
 	"fmt"
-	"net/http"
-	"time"
 
-	"github.com/cyberark/conjur-api-go/conjurapi"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	esmeta "github.com/external-secrets/external-secrets/apis/meta/v1"
 	"github.com/external-secrets/external-secrets/pkg/utils/resolvers"
 )
@@ -34,7 +30,7 @@ import (
 const JwtLifespan = 600 // 10 minutes
 
 // getJWTToken retrieves a JWT token either using the TokenRequest API for a specified service account, or from a jwt stored in a k8s secret.
-func (c *Client) getJWTToken(ctx context.Context, conjurJWTConfig *esv1beta1.ConjurJWT) (string, error) {
+func (c *Client) getJWTToken(ctx context.Context, conjurJWTConfig *esv1.ConjurJWT) (string, error) {
 	if conjurJWTConfig.ServiceAccountRef != nil {
 		// Should work for Kubernetes >=v1.22: fetch token via TokenRequest API
 		jwtToken, err := c.getJwtFromServiceAccountTokenRequest(ctx, *conjurJWTConfig.ServiceAccountRef, nil, JwtLifespan)
@@ -59,7 +55,7 @@ func (c *Client) getJWTToken(ctx context.Context, conjurJWTConfig *esv1beta1.Con
 		}
 		return jwtToken, nil
 	}
-	return "", fmt.Errorf("missing ServiceAccountRef or SecretRef")
+	return "", errors.New("missing ServiceAccountRef or SecretRef")
 }
 
 // getJwtFromServiceAccountTokenRequest uses the TokenRequest API to get a JWT token for the given service account.
@@ -77,7 +73,7 @@ func (c *Client) getJwtFromServiceAccountTokenRequest(ctx context.Context, servi
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
-	if (c.StoreKind == esv1beta1.ClusterSecretStoreKind) &&
+	if (c.StoreKind == esv1.ClusterSecretStoreKind) &&
 		(serviceAccountRef.Namespace != nil) {
 		tokenRequest.Namespace = *serviceAccountRef.Namespace
 	}
@@ -86,32 +82,4 @@ func (c *Client) getJwtFromServiceAccountTokenRequest(ctx context.Context, servi
 		return "", fmt.Errorf(errGetKubeSATokenRequest, serviceAccountRef.Name, err)
 	}
 	return tokenResponse.Status.Token, nil
-}
-
-// newClientFromJwt creates a new Conjur client using the given JWT Auth Config.
-func (c *Client) newClientFromJwt(ctx context.Context, config conjurapi.Config, jwtAuth *esv1beta1.ConjurJWT) (SecretsClient, error) {
-	jwtToken, getJWTError := c.getJWTToken(ctx, jwtAuth)
-	if getJWTError != nil {
-		return nil, getJWTError
-	}
-
-	client, clientError := c.clientAPI.NewClientFromJWT(config, jwtToken, jwtAuth.ServiceID, jwtAuth.HostID)
-	if clientError != nil {
-		return nil, clientError
-	}
-
-	return client, nil
-}
-
-// newHTTPSClient creates a new HTTPS client with the given cert.
-func newHTTPSClient(cert []byte) (*http.Client, error) {
-	pool := x509.NewCertPool()
-	ok := pool.AppendCertsFromPEM(cert)
-	if !ok {
-		return nil, fmt.Errorf("can't append Conjur SSL cert")
-	}
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
-	}
-	return &http.Client{Transport: tr, Timeout: time.Second * 10}, nil
 }
