@@ -16,6 +16,7 @@ package alibaba
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -66,7 +67,7 @@ func newClient(config *openapi.Config, options *util.RuntimeOptions) (*secretsMa
 	}
 
 	if utils.Deref(endpoint) == "" {
-		return nil, fmt.Errorf("error KMS endpoint is missing")
+		return nil, errors.New("error KMS endpoint is missing")
 	}
 
 	const (
@@ -146,7 +147,9 @@ func (s *secretsManagerClient) doAPICall(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("error invoking http request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	return s.parseResponse(resp)
 }

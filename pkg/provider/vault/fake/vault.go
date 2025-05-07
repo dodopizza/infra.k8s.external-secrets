@@ -16,6 +16,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -23,7 +24,7 @@ import (
 
 	vault "github.com/hashicorp/vault/api"
 
-	util "github.com/external-secrets/external-secrets/pkg/provider/vault/util"
+	"github.com/external-secrets/external-secrets/pkg/provider/vault/util"
 )
 
 type LoginFn func(ctx context.Context, authMethod vault.AuthMethod) (*vault.Secret, error)
@@ -104,13 +105,13 @@ func ExpectWriteWithContextValue(expected map[string]any) WriteWithContextFn {
 
 func ExpectWriteWithContextNoCall() WriteWithContextFn {
 	return func(_ context.Context, path string, data map[string]any) (*vault.Secret, error) {
-		return nil, fmt.Errorf("fail")
+		return nil, errors.New("fail")
 	}
 }
 
 func ExpectDeleteWithContextNoCall() DeleteWithContextFn {
 	return func(ctx context.Context, path string) (*vault.Secret, error) {
-		return nil, fmt.Errorf("fail")
+		return nil, errors.New("fail")
 	}
 }
 func WriteChangingReadContext(secret map[string]any, l Logical) WriteWithContextFn {
@@ -188,11 +189,15 @@ func NewTokenFn(v string) MockTokenFn {
 }
 
 func NewClearTokenFn() MockClearTokenFn {
-	return func() {}
+	return func() {
+		// no-op
+	}
 }
 
 func NewAddHeaderFn() MockAddHeaderFn {
-	return func(key, value string) {}
+	return func(key, value string) {
+		// no header
+	}
 }
 
 type VaultClient struct {
@@ -273,13 +278,27 @@ func (c *VaultClient) AddHeader(key, value string) {
 	c.MockAddHeader(key, value)
 }
 
-func ClientWithLoginMock(_ *vault.Config) (util.Client, error) {
-	cl := VaultClient{
+func ClientWithLoginMock(config *vault.Config) (util.Client, error) {
+	return clientWithLoginMockOptions(config)
+}
+
+func ModifiableClientWithLoginMock(opts ...func(cl *VaultClient)) func(config *vault.Config) (util.Client, error) {
+	return func(config *vault.Config) (util.Client, error) {
+		return clientWithLoginMockOptions(config, opts...)
+	}
+}
+
+func clientWithLoginMockOptions(_ *vault.Config, opts ...func(cl *VaultClient)) (util.Client, error) {
+	cl := &VaultClient{
 		MockAuthToken: NewAuthTokenFn(),
 		MockSetToken:  NewSetTokenFn(),
 		MockToken:     NewTokenFn(""),
 		MockAuth:      NewVaultAuth(),
 		MockLogical:   NewVaultLogical(),
+	}
+
+	for _, opt := range opts {
+		opt(cl)
 	}
 
 	return &util.VaultClient{

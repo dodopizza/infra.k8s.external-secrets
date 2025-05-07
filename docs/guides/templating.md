@@ -1,6 +1,8 @@
 # Advanced Templating v2
 
-With External Secrets Operator you can transform the data from the external secret provider before it is stored as `Kind=Secret`. You can do this with the `Spec.Target.Template`. Each data value is interpreted as a [golang template](https://golang.org/pkg/text/template/).
+With External Secrets Operator you can transform the data from the external secret provider before it is stored as `Kind=Secret`. You can do this with the `Spec.Target.Template`.
+
+Each data value is interpreted as a [Go template](https://golang.org/pkg/text/template/). Please note that referencing a non-existing key in the template will raise an error, instead of being suppressed.
 
 !!! note
 
@@ -128,6 +130,12 @@ You can achieve that by using the `filterPEM` function to extract a specific typ
 {% include 'filterpem-template-v2-external-secret.yaml' %}
 ```
 
+In case you have a secret that contains a (partial) certificate chain you can extract the `leaf`, `intermediate` or `root` certificate(s) using the `filterCertChain` function. See the following example on how to use the `filterPEM` and `filterCertChain` functions together to split the certificate chain into a `tls.crt` part only containting the leaf certificate and a `ca.crt` part with all the intermediate certificates.
+
+```yaml
+{% include 'filtercertchain-template-v2-external-secret.yaml' %}
+```
+
 ## Templating with PushSecret
 
 `PushSecret` templating is much like `ExternalSecrets` templating. In-fact under the hood, it's using the same data structure.
@@ -156,9 +164,12 @@ In addition to that you can use over 200+ [sprig functions](http://masterminds.g
 | pkcs12keyPass    | Same as `pkcs12key`. Uses the provided password to decrypt the PKCS#12 archive.                                                                                                                                              |
 | pkcs12cert       | Extracts all certificates from a PKCS#12 archive and orders them if possible. If disjunct or multiple leaf certs are provided they are returned as-is. <br/> Sort order: `leaf / intermediate(s) / root`.                    |
 | pkcs12certPass   | Same as `pkcs12cert`. Uses the provided password to decrypt the PKCS#12 archive.                                                                                                                                             |
-| pemToPkcs12      | Takes a PEM encoded certificate and key and creates a base64 enoded PKCS#12 archive.                                                                                                                                         |
+| pemToPkcs12      | Takes a PEM encoded certificate and key and creates a base64 encoded PKCS#12 archive.                                                                                                                                         |
 | pemToPkcs12Pass  | Same as `pemToPkcs12`. Uses the provided password to encrypt the PKCS#12 archive.                                                                                                                                            |
+| fullPemToPkcs12      | Takes a PEM encoded certificates chain and key and creates a base64 encoded PKCS#12 archive.                                                                                                                                         |
+| fullPemToPkcs12Pass  | Same as `fullPemToPkcs12`. Uses the provided password to encrypt the PKCS#12 archive.                                                                                                                                            |
 | filterPEM        | Filters PEM blocks with a specific type from a list of PEM blocks.                                                                                                                                                           |
+| filterCertChain  | Filters PEM block(s) with a specific certificate type (`leaf`, `intermediate` or `root`)  from a certificate chain of PEM blocks (PEM blocks with type `CERTIFICATE`). |
 | jwkPublicKeyPem  | Takes an json-serialized JWK and returns an PEM block of type `PUBLIC KEY` that contains the public key. [See here](https://golang.org/pkg/crypto/x509/#MarshalPKIXPublicKey) for details.                                   |
 | jwkPrivateKeyPem | Takes an json-serialized JWK as `string` and returns an PEM block of type `PRIVATE KEY` that contains the private key in PKCS #8 format. [See here](https://golang.org/pkg/crypto/x509/#MarshalPKCS8PrivateKey) for details. |
 | toYaml           | Takes an interface, marshals it to yaml. It returns a string, even on marshal error (empty string).                                                                                                                          |

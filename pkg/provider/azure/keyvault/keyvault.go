@@ -24,18 +24,20 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
-	"github.com/Azure/azure-sdk-for-go/profiles/latest/keyvault/keyvault"
+	"github.com/Azure/azure-sdk-for-go/services/keyvault/v7.0/keyvault"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
 	"github.com/Azure/go-autorest/autorest/azure"
 	kvauth "github.com/Azure/go-autorest/autorest/azure/auth"
+	"github.com/Azure/go-autorest/autorest/date"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/confidential"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/tidwall/gjson"
-	"golang.org/x/crypto/pkcs12"
 	"golang.org/x/crypto/sha3"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -47,11 +49,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlcfg "sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	gopkcs12 "software.sslmate.com/src/go-pkcs12"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	"github.com/external-secrets/external-secrets/pkg/constants"
 	"github.com/external-secrets/external-secrets/pkg/metrics"
 	"github.com/external-secrets/external-secrets/pkg/utils"
+	"github.com/external-secrets/external-secrets/pkg/utils/metadata"
 	"github.com/external-secrets/external-secrets/pkg/utils/resolvers"
 )
 
@@ -63,23 +67,23 @@ const (
 	AnnotationClientID   = "azure.workload.identity/client-id"
 	AnnotationTenantID   = "azure.workload.identity/tenant-id"
 	managerLabel         = "external-secrets"
+	managedBy            = "managed-by"
 
-	errUnexpectedStoreSpec   = "unexpected store spec"
-	errMissingAuthType       = "cannot initialize Azure Client: no valid authType was specified"
-	errPropNotExist          = "property %s does not exist in key %s"
-	errTagNotExist           = "tag %s does not exist"
-	errUnknownObjectType     = "unknown Azure Keyvault object Type for %s"
-	errUnmarshalJSONData     = "error unmarshalling json data: %w"
-	errDataFromCert          = "cannot get use dataFrom to get certificate secret"
-	errDataFromKey           = "cannot get use dataFrom to get key secret"
-	errMissingTenant         = "missing tenantID in store config"
-	errMissingClient         = "missing clientID: either serviceAccountRef or service account annotation '%s' is missing"
-	errMissingSecretRef      = "missing secretRef in provider config"
-	errMissingClientIDSecret = "missing accessKeyID/secretAccessKey in store config"
-	errMultipleClientID      = "multiple clientID found. Check secretRef and serviceAccountRef"
-	errMultipleTenantID      = "multiple tenantID found. Check secretRef, 'spec.provider.azurekv.tenantId', and serviceAccountRef"
-	errFindSecret            = "could not find secret %s/%s: %w"
-	errFindDataKey           = "no data for %q in secret '%s/%s'"
+	errUnexpectedStoreSpec      = "unexpected store spec"
+	errMissingAuthType          = "cannot initialize Azure Client: no valid authType was specified"
+	errPropNotExist             = "property %s does not exist in key %s"
+	errTagNotExist              = "tag %s does not exist"
+	errUnknownObjectType        = "unknown Azure Keyvault object Type for %s"
+	errUnmarshalJSONData        = "error unmarshalling json data: %w"
+	errDataFromCert             = "cannot get use dataFrom to get certificate secret"
+	errDataFromKey              = "cannot get use dataFrom to get key secret"
+	errMissingTenant            = "missing tenantID in store config"
+	errMissingClient            = "missing clientID: either serviceAccountRef or service account annotation '%s' is missing"
+	errMissingSecretRef         = "missing secretRef in provider config"
+	errMissingClientIDSecret    = "missing accessKeyID/secretAccessKey in store config"
+	errInvalidClientCredentials = "both clientSecret and clientCredentials set"
+	errMultipleClientID         = "multiple clientID found. Check secretRef and serviceAccountRef"
+	errMultipleTenantID         = "multiple tenantID found. Check secretRef, 'spec.provider.azurekv.tenantId', and serviceAccountRef"
 
 	errInvalidStore              = "invalid store"
 	errInvalidStoreSpec          = "invalid store spec"
@@ -91,12 +95,11 @@ const (
 
 	errMissingWorkloadEnvVars = "missing environment variables. AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_FEDERATED_TOKEN_FILE must be set"
 	errReadTokenFile          = "unable to read token file %s: %w"
-	errMissingSAAnnotation    = "missing service account annotation: %s"
 )
 
 // https://github.com/external-secrets/external-secrets/issues/644
-var _ esv1beta1.SecretsClient = &Azure{}
-var _ esv1beta1.Provider = &Azure{}
+var _ esv1.SecretsClient = &Azure{}
+var _ esv1.Provider = &Azure{}
 
 // interface to keyvault.BaseClient.
 type SecretClient interface {
@@ -115,29 +118,34 @@ type SecretClient interface {
 type Azure struct {
 	crClient   client.Client
 	kubeClient kcorev1.CoreV1Interface
-	store      esv1beta1.GenericStore
-	provider   *esv1beta1.AzureKVProvider
+	store      esv1.GenericStore
+	provider   *esv1.AzureKVProvider
 	baseClient SecretClient
 	namespace  string
 }
 
+type PushSecretMetadataSpec struct {
+	ExpirationDate string            `json:"expirationDate,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+}
+
 func init() {
-	esv1beta1.Register(&Azure{}, &esv1beta1.SecretStoreProvider{
-		AzureKV: &esv1beta1.AzureKVProvider{},
-	})
+	esv1.Register(&Azure{}, &esv1.SecretStoreProvider{
+		AzureKV: &esv1.AzureKVProvider{},
+	}, esv1.MaintenanceStatusMaintained)
 }
 
 // Capabilities return the provider supported capabilities (ReadOnly, WriteOnly, ReadWrite).
-func (a *Azure) Capabilities() esv1beta1.SecretStoreCapabilities {
-	return esv1beta1.SecretStoreReadWrite
+func (a *Azure) Capabilities() esv1.SecretStoreCapabilities {
+	return esv1.SecretStoreReadWrite
 }
 
 // NewClient constructs a new secrets client based on the provided store.
-func (a *Azure) NewClient(ctx context.Context, store esv1beta1.GenericStore, kube client.Client, namespace string) (esv1beta1.SecretsClient, error) {
+func (a *Azure) NewClient(ctx context.Context, store esv1.GenericStore, kube client.Client, namespace string) (esv1.SecretsClient, error) {
 	return newClient(ctx, store, kube, namespace)
 }
 
-func newClient(ctx context.Context, store esv1beta1.GenericStore, kube client.Client, namespace string) (esv1beta1.SecretsClient, error) {
+func newClient(ctx context.Context, store esv1.GenericStore, kube client.Client, namespace string) (esv1.SecretsClient, error) {
 	provider, err := getProvider(store)
 	if err != nil {
 		return nil, err
@@ -160,7 +168,7 @@ func newClient(ctx context.Context, store esv1beta1.GenericStore, kube client.Cl
 
 	// allow SecretStore controller validation to pass
 	// when using referent namespace.
-	if store.GetKind() == esv1beta1.ClusterSecretStoreKind &&
+	if store.GetKind() == esv1.ClusterSecretStoreKind &&
 		namespace == "" &&
 		isReferentSpec(provider) {
 		return az, nil
@@ -168,14 +176,14 @@ func newClient(ctx context.Context, store esv1beta1.GenericStore, kube client.Cl
 
 	var authorizer autorest.Authorizer
 	switch *provider.AuthType {
-	case esv1beta1.AzureManagedIdentity:
+	case esv1.AzureManagedIdentity:
 		authorizer, err = az.authorizerForManagedIdentity()
-	case esv1beta1.AzureServicePrincipal:
+	case esv1.AzureServicePrincipal:
 		authorizer, err = az.authorizerForServicePrincipal(ctx)
-	case esv1beta1.AzureWorkloadIdentity:
+	case esv1.AzureWorkloadIdentity:
 		authorizer, err = az.authorizerForWorkloadIdentity(ctx, NewTokenProvider)
 	default:
-		err = fmt.Errorf(errMissingAuthType)
+		err = errors.New(errMissingAuthType)
 	}
 
 	cl := keyvault.New()
@@ -185,7 +193,7 @@ func newClient(ctx context.Context, store esv1beta1.GenericStore, kube client.Cl
 	return az, err
 }
 
-func getProvider(store esv1beta1.GenericStore) (*esv1beta1.AzureKVProvider, error) {
+func getProvider(store esv1.GenericStore) (*esv1.AzureKVProvider, error) {
 	spc := store.GetSpec()
 	if spc == nil || spc.Provider.AzureKV == nil {
 		return nil, errors.New(errUnexpectedStoreSpec)
@@ -194,20 +202,20 @@ func getProvider(store esv1beta1.GenericStore) (*esv1beta1.AzureKVProvider, erro
 	return spc.Provider.AzureKV, nil
 }
 
-func (a *Azure) ValidateStore(store esv1beta1.GenericStore) (admission.Warnings, error) {
+func (a *Azure) ValidateStore(store esv1.GenericStore) (admission.Warnings, error) {
 	if store == nil {
-		return nil, fmt.Errorf(errInvalidStore)
+		return nil, errors.New(errInvalidStore)
 	}
 	spc := store.GetSpec()
 	if spc == nil {
-		return nil, fmt.Errorf(errInvalidStoreSpec)
+		return nil, errors.New(errInvalidStoreSpec)
 	}
 	if spc.Provider == nil {
-		return nil, fmt.Errorf(errInvalidStoreProv)
+		return nil, errors.New(errInvalidStoreProv)
 	}
 	p := spc.Provider.AzureKV
 	if p == nil {
-		return nil, fmt.Errorf(errInvalidAzureProv)
+		return nil, errors.New(errInvalidAzureProv)
 	}
 	if p.AuthSecretRef != nil {
 		if p.AuthSecretRef.ClientID != nil {
@@ -241,9 +249,9 @@ func canDelete(tags map[string]*string, err error) (bool, error) {
 	if aerr.StatusCode == 404 {
 		return false, nil
 	}
-	manager, ok := tags["managed-by"]
+	manager, ok := tags[managedBy]
 	if !ok || manager == nil || *manager != managerLabel {
-		return false, fmt.Errorf("not managed by external-secrets")
+		return false, errors.New("not managed by external-secrets")
 	}
 	return true, nil
 }
@@ -299,8 +307,8 @@ func (a *Azure) deleteKeyVaultCertificate(ctx context.Context, certName string) 
 	return nil
 }
 
-func (a *Azure) DeleteSecret(ctx context.Context, remoteRef esv1beta1.PushSecretRemoteRef) error {
-	objectType, secretName := getObjType(esv1beta1.ExternalSecretDataRemoteRef{Key: remoteRef.GetRemoteKey()})
+func (a *Azure) DeleteSecret(ctx context.Context, remoteRef esv1.PushSecretRemoteRef) error {
+	objectType, secretName := getObjType(esv1.ExternalSecretDataRemoteRef{Key: remoteRef.GetRemoteKey()})
 	switch objectType {
 	case defaultObjType:
 		return a.deleteKeyVaultSecret(ctx, secretName)
@@ -313,8 +321,8 @@ func (a *Azure) DeleteSecret(ctx context.Context, remoteRef esv1beta1.PushSecret
 	}
 }
 
-func (a *Azure) SecretExists(ctx context.Context, remoteRef esv1beta1.PushSecretRemoteRef) (bool, error) {
-	objectType, secretName := getObjType(esv1beta1.ExternalSecretDataRemoteRef{Key: remoteRef.GetRemoteKey()})
+func (a *Azure) SecretExists(ctx context.Context, remoteRef esv1.PushSecretRemoteRef) (bool, error) {
+	objectType, secretName := getObjType(esv1.ExternalSecretDataRemoteRef{Key: remoteRef.GetRemoteKey()})
 
 	var err error
 	switch objectType {
@@ -331,7 +339,7 @@ func (a *Azure) SecretExists(ctx context.Context, remoteRef esv1beta1.PushSecret
 
 	err = parseError(err)
 	if err != nil {
-		var noSecretErr esv1beta1.NoSecretError
+		var noSecretErr esv1.NoSecretError
 		if errors.As(err, &noSecretErr) {
 			return false, nil
 		}
@@ -343,18 +351,24 @@ func (a *Azure) SecretExists(ctx context.Context, remoteRef esv1beta1.PushSecret
 
 func getCertificateFromValue(value []byte) (*x509.Certificate, error) {
 	// 1st: try decode pkcs12
-	_, localCert, err := pkcs12.Decode(value, "")
+	_, localCert, err := gopkcs12.Decode(value, "")
 	if err == nil {
 		return localCert, nil
 	}
 
-	// 2nd: try DER
+	// 2nd: try decode pkcs12 with chain
+	_, localCert, _, err = gopkcs12.DecodeChain(value, "")
+	if err == nil {
+		return localCert, nil
+	}
+
+	// 3rd: try DER
 	localCert, err = x509.ParseCertificate(value)
 	if err == nil {
 		return localCert, nil
 	}
 
-	// 3nd: parse PEM blocks
+	// 4th: parse PEM blocks
 	for {
 		block, rest := pem.Decode(value)
 		value = rest
@@ -366,7 +380,7 @@ func getCertificateFromValue(value []byte) (*x509.Certificate, error) {
 			return cert, nil
 		}
 	}
-	return nil, fmt.Errorf("could not parse certificate value as PKCS#12, DER or PEM")
+	return nil, errors.New("could not parse certificate value as PKCS#12, DER or PEM")
 }
 
 func getKeyFromValue(value []byte) (any, error) {
@@ -399,15 +413,15 @@ func canCreate(tags map[string]*string, err error) (bool, error) {
 		return false, fmt.Errorf("unexpected api error: %w", err)
 	}
 	if err == nil {
-		manager, ok := tags["managed-by"]
+		manager, ok := tags[managedBy]
 		if !ok || manager == nil || *manager != managerLabel {
-			return false, fmt.Errorf("not managed by external-secrets")
+			return false, errors.New("not managed by external-secrets")
 		}
 	}
 	return true, nil
 }
 
-func (a *Azure) setKeyVaultSecret(ctx context.Context, secretName string, value []byte) error {
+func (a *Azure) setKeyVaultSecret(ctx context.Context, secretName string, value []byte, expires *date.UnixTime, tags map[string]string) error {
 	secret, err := a.baseClient.GetSecret(ctx, *a.provider.VaultURL, secretName, "")
 	metrics.ObserveAPICall(constants.ProviderAzureKV, constants.CallAzureKVGetSecret, err)
 	ok, err := canCreate(secret.Tags, err)
@@ -419,17 +433,32 @@ func (a *Azure) setKeyVaultSecret(ctx context.Context, secretName string, value 
 	}
 	val := string(value)
 	if secret.Value != nil && val == *secret.Value {
-		return nil
+		if secret.Attributes != nil {
+			if (secret.Attributes.Expires == nil && expires == nil) ||
+				(secret.Attributes.Expires != nil && expires != nil && *secret.Attributes.Expires == *expires) {
+				return nil
+			}
+		}
 	}
+
 	secretParams := keyvault.SecretSetParameters{
 		Value: &val,
 		Tags: map[string]*string{
-			"managed-by": pointer.To(managerLabel),
+			managedBy: pointer.To(managerLabel),
 		},
 		SecretAttributes: &keyvault.SecretAttributes{
 			Enabled: pointer.To(true),
 		},
 	}
+
+	for k, v := range tags {
+		secretParams.Tags[k] = &v
+	}
+
+	if expires != nil {
+		secretParams.SecretAttributes.Expires = expires
+	}
+
 	_, err = a.baseClient.SetSecret(ctx, *a.provider.VaultURL, secretName, secretParams)
 	metrics.ObserveAPICall(constants.ProviderAzureKV, constants.CallAzureKVGetSecret, err)
 	if err != nil {
@@ -438,7 +467,7 @@ func (a *Azure) setKeyVaultSecret(ctx context.Context, secretName string, value 
 	return nil
 }
 
-func (a *Azure) setKeyVaultCertificate(ctx context.Context, secretName string, value []byte) error {
+func (a *Azure) setKeyVaultCertificate(ctx context.Context, secretName string, value []byte, tags map[string]string) error {
 	val := b64.StdEncoding.EncodeToString(value)
 	localCert, err := getCertificateFromValue(value)
 	if err != nil {
@@ -460,9 +489,14 @@ func (a *Azure) setKeyVaultCertificate(ctx context.Context, secretName string, v
 	params := keyvault.CertificateImportParameters{
 		Base64EncodedCertificate: &val,
 		Tags: map[string]*string{
-			"managed-by": pointer.To(managerLabel),
+			managedBy: pointer.To(managerLabel),
 		},
 	}
+
+	for k, v := range tags {
+		params.Tags[k] = &v
+	}
+
 	_, err = a.baseClient.ImportCertificate(ctx, *a.provider.VaultURL, secretName, params)
 	metrics.ObserveAPICall(constants.ProviderAzureKV, constants.CallAzureKVImportCertificate, err)
 	if err != nil {
@@ -482,7 +516,7 @@ func equalKeys(newKey, oldKey keyvault.JSONWebKey) bool {
 
 	return newKey.Kty == oldKey.Kty && (rsaCheck || symmetricCheck)
 }
-func (a *Azure) setKeyVaultKey(ctx context.Context, secretName string, value []byte) error {
+func (a *Azure) setKeyVaultKey(ctx context.Context, secretName string, value []byte, tags map[string]string) error {
 	key, err := getKeyFromValue(value)
 	if err != nil {
 		return fmt.Errorf("could not load private key %v: %w", secretName, err)
@@ -516,8 +550,12 @@ func (a *Azure) setKeyVaultKey(ctx context.Context, secretName string, value []b
 		Key:           &azkey,
 		KeyAttributes: &keyvault.KeyAttributes{},
 		Tags: map[string]*string{
-			"managed-by": pointer.To(managerLabel),
+			managedBy: pointer.To(managerLabel),
 		},
+	}
+
+	for k, v := range tags {
+		params.Tags[k] = &v
 	}
 	_, err = a.baseClient.ImportKey(ctx, *a.provider.VaultURL, secretName, params)
 	metrics.ObserveAPICall(constants.ProviderAzureKV, constants.CallAzureKVImportKey, err)
@@ -527,21 +565,65 @@ func (a *Azure) setKeyVaultKey(ctx context.Context, secretName string, value []b
 	return nil
 }
 
-// PushSecret stores secrets into a Key vault instance.
-func (a *Azure) PushSecret(ctx context.Context, secret *corev1.Secret, data esv1beta1.PushSecretData) error {
-	if data.GetSecretKey() == "" {
-		return fmt.Errorf("pushing the whole secret is not yet implemented")
+func getSecretKey(secret *corev1.Secret, data esv1.PushSecretData) ([]byte, error) {
+	if data.GetSecretKey() != "" {
+		return secret.Data[data.GetSecretKey()], nil
 	}
 
-	objectType, secretName := getObjType(esv1beta1.ExternalSecretDataRemoteRef{Key: data.GetRemoteKey()})
-	value := secret.Data[data.GetSecretKey()]
+	// Must convert secret values to string, otherwise data will be sent as base64 to Vault
+	secretStringVal := make(map[string]string)
+	for k, v := range secret.Data {
+		secretStringVal[k] = string(v)
+	}
+	value, err := utils.JSONMarshal(secretStringVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize secret content as JSON: %w", err)
+	}
+	return value, nil
+}
+
+// PushSecret stores secrets into a Key vault instance.
+func (a *Azure) PushSecret(ctx context.Context, secret *corev1.Secret, data esv1.PushSecretData) error {
+	var (
+		value   []byte
+		err     error
+		expires *date.UnixTime
+		tags    map[string]string
+	)
+
+	if value, err = getSecretKey(secret, data); err != nil {
+		return err
+	}
+
+	metadata, err := metadata.ParseMetadataParameters[PushSecretMetadataSpec](data.GetMetadata())
+	if err != nil {
+		return fmt.Errorf("failed to parse push secret metadata: %w", err)
+	}
+
+	if metadata != nil && metadata.Spec.ExpirationDate != "" {
+		t, err := time.Parse(time.RFC3339, metadata.Spec.ExpirationDate)
+		if err != nil {
+			return fmt.Errorf("error parsing expiration date in metadata: %w. Expected format: YYYY-MM-DDTHH:MM:SSZ (RFC3339). Example: 2024-12-31T20:00:00Z", err)
+		}
+		unixTime := date.UnixTime(t)
+		expires = &unixTime
+	}
+
+	if metadata != nil && metadata.Spec.Tags != nil {
+		if _, exists := metadata.Spec.Tags[managedBy]; exists {
+			return fmt.Errorf("error parsing tags in metadata: Cannot specify a '%s' tag", managedBy)
+		}
+		tags = metadata.Spec.Tags
+	}
+
+	objectType, secretName := getObjType(esv1.ExternalSecretDataRemoteRef{Key: data.GetRemoteKey()})
 	switch objectType {
 	case defaultObjType:
-		return a.setKeyVaultSecret(ctx, secretName, value)
+		return a.setKeyVaultSecret(ctx, secretName, value, expires, tags)
 	case objectTypeCert:
-		return a.setKeyVaultCertificate(ctx, secretName, value)
+		return a.setKeyVaultCertificate(ctx, secretName, value, tags)
 	case objectTypeKey:
-		return a.setKeyVaultKey(ctx, secretName, value)
+		return a.setKeyVaultKey(ctx, secretName, value, tags)
 	default:
 		return fmt.Errorf("secret type %v not supported", objectType)
 	}
@@ -549,7 +631,7 @@ func (a *Azure) PushSecret(ctx context.Context, secret *corev1.Secret, data esv1
 
 // Implements store.Client.GetAllSecrets Interface.
 // Retrieves a map[string][]byte with the secret names as key and the secret itself as the calue.
-func (a *Azure) GetAllSecrets(ctx context.Context, ref esv1beta1.ExternalSecretFind) (map[string][]byte, error) {
+func (a *Azure) GetAllSecrets(ctx context.Context, ref esv1.ExternalSecretFind) (map[string][]byte, error) {
 	basicClient := a.baseClient
 	secretsMap := make(map[string][]byte)
 	checkTags := len(ref.Tags) > 0
@@ -643,15 +725,15 @@ func getProperty(secret, property, key string) ([]byte, error) {
 func parseError(err error) error {
 	aerr := autorest.DetailedError{}
 	if errors.As(err, &aerr) && aerr.StatusCode == 404 {
-		return esv1beta1.NoSecretError{}
+		return esv1.NoSecretError{}
 	}
 	return err
 }
 
-// Implements store.Client.GetSecret Interface.
+// GetSecret implements store.Client.GetSecret Interface.
 // Retrieves a secret/Key/Certificate/Tag with the secret name defined in ref.Name
 // The Object Type is defined as a prefix in the ref.Name , if no prefix is defined , we assume a secret is required.
-func (a *Azure) GetSecret(ctx context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) ([]byte, error) {
+func (a *Azure) GetSecret(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) ([]byte, error) {
 	objectType, secretName := getObjType(ref)
 
 	switch objectType {
@@ -664,7 +746,7 @@ func (a *Azure) GetSecret(ctx context.Context, ref esv1beta1.ExternalSecretDataR
 		if err != nil {
 			return nil, err
 		}
-		if ref.MetadataPolicy == esv1beta1.ExternalSecretMetadataPolicyFetch {
+		if ref.MetadataPolicy == esv1.ExternalSecretMetadataPolicyFetch {
 			return getSecretTag(secretResp.Tags, ref.Property)
 		}
 		return getProperty(*secretResp.Value, ref.Property, ref.Key)
@@ -677,7 +759,7 @@ func (a *Azure) GetSecret(ctx context.Context, ref esv1beta1.ExternalSecretDataR
 		if err != nil {
 			return nil, err
 		}
-		if ref.MetadataPolicy == esv1beta1.ExternalSecretMetadataPolicyFetch {
+		if ref.MetadataPolicy == esv1.ExternalSecretMetadataPolicyFetch {
 			return getSecretTag(certResp.Tags, ref.Property)
 		}
 		return *certResp.Cer, nil
@@ -691,7 +773,7 @@ func (a *Azure) GetSecret(ctx context.Context, ref esv1beta1.ExternalSecretDataR
 		if err != nil {
 			return nil, err
 		}
-		if ref.MetadataPolicy == esv1beta1.ExternalSecretMetadataPolicyFetch {
+		if ref.MetadataPolicy == esv1.ExternalSecretMetadataPolicyFetch {
 			return getSecretTag(keyResp.Tags, ref.Property)
 		}
 		return json.Marshal(keyResp.Key)
@@ -701,7 +783,7 @@ func (a *Azure) GetSecret(ctx context.Context, ref esv1beta1.ExternalSecretDataR
 }
 
 // returns a SecretBundle with the tags values.
-func (a *Azure) getSecretTags(ctx context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) (map[string]*string, error) {
+func (a *Azure) getSecretTags(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) (map[string]*string, error) {
 	_, secretName := getObjType(ref)
 	secretResp, err := a.baseClient.GetSecret(ctx, *a.provider.VaultURL, secretName, ref.Version)
 	metrics.ObserveAPICall(constants.ProviderAzureKV, constants.CallAzureKVGetSecret, err)
@@ -731,7 +813,7 @@ func (a *Azure) getSecretTags(ctx context.Context, ref esv1beta1.ExternalSecretD
 
 // Implements store.Client.GetSecretMap Interface.
 // New version of GetSecretMap.
-func (a *Azure) GetSecretMap(ctx context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
+func (a *Azure) GetSecretMap(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
 	objectType, secretName := getObjType(ref)
 
 	switch objectType {
@@ -741,7 +823,7 @@ func (a *Azure) GetSecretMap(ctx context.Context, ref esv1beta1.ExternalSecretDa
 			return nil, err
 		}
 
-		if ref.MetadataPolicy == esv1beta1.ExternalSecretMetadataPolicyFetch {
+		if ref.MetadataPolicy == esv1.ExternalSecretMetadataPolicyFetch {
 			tags, _ := a.getSecretTags(ctx, ref)
 			return getSecretMapProperties(tags, ref.Key, ref.Property), nil
 		}
@@ -749,9 +831,9 @@ func (a *Azure) GetSecretMap(ctx context.Context, ref esv1beta1.ExternalSecretDa
 		return getSecretMapMap(data)
 
 	case objectTypeCert:
-		return nil, fmt.Errorf(errDataFromCert)
+		return nil, errors.New(errDataFromCert)
 	case objectTypeKey:
-		return nil, fmt.Errorf(errDataFromKey)
+		return nil, errors.New(errDataFromKey)
 	}
 	return nil, fmt.Errorf(errUnknownObjectType, secretName)
 }
@@ -807,7 +889,7 @@ func (a *Azure) authorizerForWorkloadIdentity(ctx context.Context, tokenProvider
 		if clientID == "" || tenantID == "" || tokenFilePath == "" {
 			return nil, errors.New(errMissingWorkloadEnvVars)
 		}
-		token, err := os.ReadFile(tokenFilePath)
+		token, err := os.ReadFile(filepath.Clean(tokenFilePath))
 		if err != nil {
 			return nil, fmt.Errorf(errReadTokenFile, tokenFilePath, err)
 		}
@@ -818,7 +900,7 @@ func (a *Azure) authorizerForWorkloadIdentity(ctx context.Context, tokenProvider
 		return autorest.NewBearerAuthorizer(tp), nil
 	}
 	ns := a.namespace
-	if a.store.GetKind() == esv1beta1.ClusterSecretStoreKind && a.provider.ServiceAccountRef.Namespace != nil {
+	if a.store.GetKind() == esv1.ClusterSecretStoreKind && a.provider.ServiceAccountRef.Namespace != nil {
 		ns = *a.provider.ServiceAccountRef.Namespace
 	}
 	var sa corev1.ServiceAccount
@@ -834,7 +916,7 @@ func (a *Azure) authorizerForWorkloadIdentity(ctx context.Context, tokenProvider
 	// First check if AuthSecretRef is set and clientID can be fetched from there
 	if a.provider.AuthSecretRef != nil {
 		if a.provider.AuthSecretRef.ClientID == nil {
-			return nil, fmt.Errorf(errMissingClientIDSecret)
+			return nil, errors.New(errMissingClientIDSecret)
 		}
 		clientID, err = resolvers.SecretKeyRef(
 			ctx,
@@ -851,7 +933,7 @@ func (a *Azure) authorizerForWorkloadIdentity(ctx context.Context, tokenProvider
 		if val, found := sa.ObjectMeta.Annotations[AnnotationClientID]; found {
 			// If clientID is defined in both Annotations and AuthSecretRef, return an error
 			if clientID != "" {
-				return nil, fmt.Errorf(errMultipleClientID)
+				return nil, errors.New(errMultipleClientID)
 			}
 			clientID = val
 		}
@@ -877,7 +959,7 @@ func (a *Azure) authorizerForWorkloadIdentity(ctx context.Context, tokenProvider
 			}
 		}
 	}
-	// Check if spec.provider.azurekv.tenantId is set
+	// Check if spec.provider.azurekv.tenantID is set
 	if tenantID == "" && a.provider.TenantID != nil {
 		tenantID = *a.provider.TenantID
 	}
@@ -886,7 +968,7 @@ func (a *Azure) authorizerForWorkloadIdentity(ctx context.Context, tokenProvider
 		if val, found := sa.ObjectMeta.Annotations[AnnotationTenantID]; found {
 			// If tenantID is defined in both Annotations and AuthSecretRef, return an error
 			if tenantID != "" {
-				return nil, fmt.Errorf(errMultipleTenantID)
+				return nil, errors.New(errMultipleTenantID)
 			}
 			tenantID = val
 		}
@@ -939,7 +1021,7 @@ func NewTokenProvider(ctx context.Context, token, clientID, tenantID, aadEndpoin
 	cred := confidential.NewCredFromAssertionCallback(func(ctx context.Context, aro confidential.AssertionRequestOptions) (string, error) {
 		return token, nil
 	})
-	cClient, err := confidential.New(fmt.Sprintf("%s%s/oauth2/token", aadEndpoint, tenantID), clientID, cred)
+	cClient, err := confidential.New(fmt.Sprintf("%s%s", aadEndpoint, tenantID), clientID, cred)
 	if err != nil {
 		return nil, err
 	}
@@ -974,48 +1056,98 @@ func (a *Azure) authorizerForManagedIdentity() (autorest.Authorizer, error) {
 
 func (a *Azure) authorizerForServicePrincipal(ctx context.Context) (autorest.Authorizer, error) {
 	if a.provider.TenantID == nil {
-		return nil, fmt.Errorf(errMissingTenant)
+		return nil, errors.New(errMissingTenant)
 	}
 	if a.provider.AuthSecretRef == nil {
-		return nil, fmt.Errorf(errMissingSecretRef)
+		return nil, errors.New(errMissingSecretRef)
 	}
-	if a.provider.AuthSecretRef.ClientID == nil || a.provider.AuthSecretRef.ClientSecret == nil {
-		return nil, fmt.Errorf(errMissingClientIDSecret)
+	if a.provider.AuthSecretRef.ClientID == nil || (a.provider.AuthSecretRef.ClientSecret == nil && a.provider.AuthSecretRef.ClientCertificate == nil) {
+		return nil, errors.New(errMissingClientIDSecret)
 	}
+	if a.provider.AuthSecretRef.ClientSecret != nil && a.provider.AuthSecretRef.ClientCertificate != nil {
+		return nil, errors.New(errInvalidClientCredentials)
+	}
+
+	return a.getAuthorizerFromCredentials(ctx)
+}
+
+func (a *Azure) getAuthorizerFromCredentials(ctx context.Context) (autorest.Authorizer, error) {
 	clientID, err := resolvers.SecretKeyRef(
 		ctx,
 		a.crClient,
 		a.store.GetKind(),
-		a.namespace, a.provider.AuthSecretRef.ClientID)
+		a.namespace, a.provider.AuthSecretRef.ClientID,
+	)
+
 	if err != nil {
 		return nil, err
 	}
-	clientSecret, err := resolvers.SecretKeyRef(
-		ctx,
-		a.crClient,
-		a.store.GetKind(),
-		a.namespace, a.provider.AuthSecretRef.ClientSecret)
-	if err != nil {
-		return nil, err
+
+	if a.provider.AuthSecretRef.ClientSecret != nil {
+		clientSecret, err := resolvers.SecretKeyRef(
+			ctx,
+			a.crClient,
+			a.store.GetKind(),
+			a.namespace, a.provider.AuthSecretRef.ClientSecret,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		return getAuthorizerForClientSecret(
+			clientID,
+			clientSecret,
+			*a.provider.TenantID,
+			a.provider.EnvironmentType,
+		)
+	} else {
+		clientCertificate, err := resolvers.SecretKeyRef(
+			ctx,
+			a.crClient,
+			a.store.GetKind(),
+			a.namespace, a.provider.AuthSecretRef.ClientCertificate,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		return getAuthorizerForClientCertificate(
+			clientID,
+			[]byte(clientCertificate),
+			*a.provider.TenantID,
+			a.provider.EnvironmentType,
+		)
 	}
-	clientCredentialsConfig := kvauth.NewClientCredentialsConfig(clientID, clientSecret, *a.provider.TenantID)
-	clientCredentialsConfig.Resource = kvResourceForProviderConfig(a.provider.EnvironmentType)
-	clientCredentialsConfig.AADEndpoint = AadEndpointForType(a.provider.EnvironmentType)
+}
+
+func getAuthorizerForClientSecret(clientID, clientSecret, tenantID string, environmentType esv1.AzureEnvironmentType) (autorest.Authorizer, error) {
+	clientCredentialsConfig := kvauth.NewClientCredentialsConfig(clientID, clientSecret, tenantID)
+	clientCredentialsConfig.Resource = kvResourceForProviderConfig(environmentType)
+	clientCredentialsConfig.AADEndpoint = AadEndpointForType(environmentType)
 	return clientCredentialsConfig.Authorizer()
+}
+
+func getAuthorizerForClientCertificate(clientID string, certificateBytes []byte, tenantID string, environmentType esv1.AzureEnvironmentType) (autorest.Authorizer, error) {
+	clientCertificateConfig := NewClientInMemoryCertificateConfig(clientID, certificateBytes, tenantID)
+	clientCertificateConfig.Resource = kvResourceForProviderConfig(environmentType)
+	clientCertificateConfig.AADEndpoint = AadEndpointForType(environmentType)
+	return clientCertificateConfig.Authorizer()
 }
 
 func (a *Azure) Close(_ context.Context) error {
 	return nil
 }
 
-func (a *Azure) Validate() (esv1beta1.ValidationResult, error) {
-	if a.store.GetKind() == esv1beta1.ClusterSecretStoreKind && isReferentSpec(a.provider) {
-		return esv1beta1.ValidationResultUnknown, nil
+func (a *Azure) Validate() (esv1.ValidationResult, error) {
+	if a.store.GetKind() == esv1.ClusterSecretStoreKind && isReferentSpec(a.provider) {
+		return esv1.ValidationResultUnknown, nil
 	}
-	return esv1beta1.ValidationResultReady, nil
+	return esv1.ValidationResultReady, nil
 }
 
-func isReferentSpec(prov *esv1beta1.AzureKVProvider) bool {
+func isReferentSpec(prov *esv1.AzureKVProvider) bool {
 	if prov.AuthSecretRef != nil &&
 		((prov.AuthSecretRef.ClientID != nil &&
 			prov.AuthSecretRef.ClientID.Namespace == nil) ||
@@ -1030,46 +1162,46 @@ func isReferentSpec(prov *esv1beta1.AzureKVProvider) bool {
 	return false
 }
 
-func AadEndpointForType(t esv1beta1.AzureEnvironmentType) string {
+func AadEndpointForType(t esv1.AzureEnvironmentType) string {
 	switch t {
-	case esv1beta1.AzureEnvironmentPublicCloud:
+	case esv1.AzureEnvironmentPublicCloud:
 		return azure.PublicCloud.ActiveDirectoryEndpoint
-	case esv1beta1.AzureEnvironmentChinaCloud:
+	case esv1.AzureEnvironmentChinaCloud:
 		return azure.ChinaCloud.ActiveDirectoryEndpoint
-	case esv1beta1.AzureEnvironmentUSGovernmentCloud:
+	case esv1.AzureEnvironmentUSGovernmentCloud:
 		return azure.USGovernmentCloud.ActiveDirectoryEndpoint
-	case esv1beta1.AzureEnvironmentGermanCloud:
+	case esv1.AzureEnvironmentGermanCloud:
 		return azure.GermanCloud.ActiveDirectoryEndpoint
 	default:
 		return azure.PublicCloud.ActiveDirectoryEndpoint
 	}
 }
 
-func ServiceManagementEndpointForType(t esv1beta1.AzureEnvironmentType) string {
+func ServiceManagementEndpointForType(t esv1.AzureEnvironmentType) string {
 	switch t {
-	case esv1beta1.AzureEnvironmentPublicCloud:
+	case esv1.AzureEnvironmentPublicCloud:
 		return azure.PublicCloud.ServiceManagementEndpoint
-	case esv1beta1.AzureEnvironmentChinaCloud:
+	case esv1.AzureEnvironmentChinaCloud:
 		return azure.ChinaCloud.ServiceManagementEndpoint
-	case esv1beta1.AzureEnvironmentUSGovernmentCloud:
+	case esv1.AzureEnvironmentUSGovernmentCloud:
 		return azure.USGovernmentCloud.ServiceManagementEndpoint
-	case esv1beta1.AzureEnvironmentGermanCloud:
+	case esv1.AzureEnvironmentGermanCloud:
 		return azure.GermanCloud.ServiceManagementEndpoint
 	default:
 		return azure.PublicCloud.ServiceManagementEndpoint
 	}
 }
 
-func kvResourceForProviderConfig(t esv1beta1.AzureEnvironmentType) string {
+func kvResourceForProviderConfig(t esv1.AzureEnvironmentType) string {
 	var res string
 	switch t {
-	case esv1beta1.AzureEnvironmentPublicCloud:
+	case esv1.AzureEnvironmentPublicCloud:
 		res = azure.PublicCloud.KeyVaultEndpoint
-	case esv1beta1.AzureEnvironmentChinaCloud:
+	case esv1.AzureEnvironmentChinaCloud:
 		res = azure.ChinaCloud.KeyVaultEndpoint
-	case esv1beta1.AzureEnvironmentUSGovernmentCloud:
+	case esv1.AzureEnvironmentUSGovernmentCloud:
 		res = azure.USGovernmentCloud.KeyVaultEndpoint
-	case esv1beta1.AzureEnvironmentGermanCloud:
+	case esv1.AzureEnvironmentGermanCloud:
 		res = azure.GermanCloud.KeyVaultEndpoint
 	default:
 		res = azure.PublicCloud.KeyVaultEndpoint
@@ -1077,7 +1209,7 @@ func kvResourceForProviderConfig(t esv1beta1.AzureEnvironmentType) string {
 	return strings.TrimSuffix(res, "/")
 }
 
-func getObjType(ref esv1beta1.ExternalSecretDataRemoteRef) (string, string) {
+func getObjType(ref esv1.ExternalSecretDataRemoteRef) (string, string) {
 	objectType := defaultObjType
 
 	secretName := ref.Key
@@ -1091,7 +1223,7 @@ func getObjType(ref esv1beta1.ExternalSecretDataRemoteRef) (string, string) {
 	return objectType, secretName
 }
 
-func isValidSecret(checkTags, checkName bool, ref esv1beta1.ExternalSecretFind, secret keyvault.SecretItem) (bool, string) {
+func isValidSecret(checkTags, checkName bool, ref esv1.ExternalSecretFind, secret keyvault.SecretItem) (bool, string) {
 	if secret.ID == nil || !*secret.Attributes.Enabled {
 		return false, ""
 	}
@@ -1108,12 +1240,12 @@ func isValidSecret(checkTags, checkName bool, ref esv1beta1.ExternalSecretFind, 
 	return true, secretName
 }
 
-func okByName(ref esv1beta1.ExternalSecretFind, secretName string) bool {
+func okByName(ref esv1.ExternalSecretFind, secretName string) bool {
 	matches, _ := regexp.MatchString(ref.Name.RegExp, secretName)
 	return matches
 }
 
-func okByTags(ref esv1beta1.ExternalSecretFind, secret keyvault.SecretItem) bool {
+func okByTags(ref esv1.ExternalSecretFind, secret keyvault.SecretItem) bool {
 	tagsFound := true
 	for k, v := range ref.Tags {
 		if val, ok := secret.Tags[k]; !ok || *val != v {

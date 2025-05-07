@@ -16,13 +16,13 @@ package onboardbase
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	v1 "github.com/external-secrets/external-secrets/apis/meta/v1"
 	"github.com/external-secrets/external-secrets/pkg/provider/onboardbase/client"
 	"github.com/external-secrets/external-secrets/pkg/provider/onboardbase/fake"
@@ -44,8 +44,8 @@ type onboardbaseTestCase struct {
 	fakeClient          *fake.OnboardbaseClient
 	request             client.SecretRequest
 	response            *client.SecretResponse
-	remoteRef           *esv1beta1.ExternalSecretDataRemoteRef
-	PushSecretRemoteRef esv1beta1.PushSecretRemoteRef
+	remoteRef           *esv1.ExternalSecretDataRemoteRef
+	PushSecretRemoteRef esv1.PushSecretRemoteRef
 	apiErr              error
 	expectError         string
 	expectedSecret      string
@@ -65,8 +65,8 @@ func makeValidAPIOutput() *client.SecretResponse {
 	}
 }
 
-func makeValidRemoteRef() *esv1beta1.ExternalSecretDataRemoteRef {
-	return &esv1beta1.ExternalSecretDataRemoteRef{
+func makeValidRemoteRef() *esv1.ExternalSecretDataRemoteRef {
+	return &esv1.ExternalSecretDataRemoteRef{
 		Key: validSecretName,
 	}
 }
@@ -83,7 +83,7 @@ func (pRef pushRemoteRef) GetRemoteKey() string {
 	return pRef.secretKey
 }
 
-func makeValidPushRemoteRef(key string) esv1beta1.PushSecretRemoteRef {
+func makeValidPushRemoteRef(key string) esv1.PushSecretRemoteRef {
 	return pushRemoteRef{
 		secretKey: key,
 	}
@@ -128,7 +128,7 @@ func TestGetSecret(t *testing.T) {
 		pstc.request.Name = missingSecret
 		pstc.response = nil
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	setInvalidSecret := func(pstc *onboardbaseTestCase) {
@@ -137,14 +137,14 @@ func TestGetSecret(t *testing.T) {
 		pstc.request.Name = invalidSecret
 		pstc.response = nil
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	setClientError := func(pstc *onboardbaseTestCase) {
 		pstc.label = "invalid client error"
 		pstc.response = &client.SecretResponse{}
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	testCases := []*onboardbaseTestCase{
@@ -175,7 +175,7 @@ func TestDeleteSecret(t *testing.T) {
 		pstc.request.Name = missingSecret
 		pstc.response = nil
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	setInvalidSecret := func(pstc *onboardbaseTestCase) {
@@ -185,7 +185,7 @@ func TestDeleteSecret(t *testing.T) {
 		pstc.request.Name = invalidSecret
 		pstc.response = nil
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	deleteSecret := func(pstc *onboardbaseTestCase) {
@@ -237,7 +237,7 @@ func TestGetSecretMap(t *testing.T) {
 		pstc.label = "client error"
 		pstc.response = &client.SecretResponse{}
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	testCases := []*onboardbaseTestCase{
@@ -272,14 +272,14 @@ func ErrorContains(out error, want string) bool {
 	return strings.Contains(out.Error(), want)
 }
 
-type storeModifier func(*esv1beta1.SecretStore) *esv1beta1.SecretStore
+type storeModifier func(*esv1.SecretStore) *esv1.SecretStore
 
-func makeSecretStore(fn ...storeModifier) *esv1beta1.SecretStore {
-	store := &esv1beta1.SecretStore{
-		Spec: esv1beta1.SecretStoreSpec{
-			Provider: &esv1beta1.SecretStoreProvider{
-				Onboardbase: &esv1beta1.OnboardbaseProvider{
-					Auth: &esv1beta1.OnboardbaseAuthSecretRef{},
+func makeSecretStore(fn ...storeModifier) *esv1.SecretStore {
+	store := &esv1.SecretStore{
+		Spec: esv1.SecretStoreSpec{
+			Provider: &esv1.SecretStoreProvider{
+				Onboardbase: &esv1.OnboardbaseProvider{
+					Auth: &esv1.OnboardbaseAuthSecretRef{},
 				},
 			},
 		},
@@ -291,7 +291,7 @@ func makeSecretStore(fn ...storeModifier) *esv1beta1.SecretStore {
 }
 
 func withAuth(name, key string, namespace *string, passcode string) storeModifier {
-	return func(store *esv1beta1.SecretStore) *esv1beta1.SecretStore {
+	return func(store *esv1.SecretStore) *esv1.SecretStore {
 		store.Spec.Provider.Onboardbase.Auth.OnboardbaseAPIKeyRef = v1.SecretKeySelector{
 			Name:      name,
 			Key:       key,
@@ -308,7 +308,7 @@ func withAuth(name, key string, namespace *string, passcode string) storeModifie
 
 type ValidateStoreTestCase struct {
 	label string
-	store *esv1beta1.SecretStore
+	store *esv1.SecretStore
 	err   error
 }
 
@@ -319,17 +319,17 @@ func TestValidateStore(t *testing.T) {
 		{
 			label: "invalid store missing onboardbaseAPIKey.name",
 			store: makeSecretStore(withAuth("", "", nil, "")),
-			err:   fmt.Errorf("invalid store: onboardbaseAPIKey.name cannot be empty"),
+			err:   errors.New("invalid store: onboardbaseAPIKey.name cannot be empty"),
 		},
 		{
 			label: "invalid store missing onboardbasePasscode.name",
 			store: makeSecretStore(withAuth(secretName, "", nil, "")),
-			err:   fmt.Errorf("invalid store: onboardbasePasscode.name cannot be empty"),
+			err:   errors.New("invalid store: onboardbasePasscode.name cannot be empty"),
 		},
 		{
 			label: "invalid store namespace not allowed",
 			store: makeSecretStore(withAuth(secretName, "", &namespace, "passcode")),
-			err:   fmt.Errorf("invalid store: namespace not allowed with namespaced SecretStore"),
+			err:   errors.New("invalid store: namespace should either be empty or match the namespace of the SecretStore for a namespaced SecretStore"),
 		},
 		{
 			label: "valid provide optional onboardbaseAPIKey.key",

@@ -16,6 +16,7 @@ package onepassword
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -27,15 +28,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	pointer "k8s.io/utils/ptr"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	esmeta "github.com/external-secrets/external-secrets/apis/meta/v1"
 	"github.com/external-secrets/external-secrets/pkg/provider/onepassword/fake"
+	"github.com/external-secrets/external-secrets/pkg/utils/metadata"
 )
 
 const (
 	// vaults and items.
-	myVault, myVaultID                       = "my-vault", "my-vault-id"
-	myItem, myItemID                         = "my-item", "my-item-id"
+	myVault, myVaultID, myVaultUUID          = "my-vault", "my-vault-id", "39c31136-d086-47e9-a52c-8fe330d2669a"
+	myItem, myItemID, myItemUUID             = "my-item", "my-item-id", "687adbe7-e6d2-4059-9a62-dbb95d291143"
 	mySharedVault, mySharedVaultID           = "my-shared-vault", "my-shared-vault-id"
 	mySharedItem, mySharedItemID             = "my-shared-item", "my-shared-item-id"
 	myOtherVault, myOtherVaultID             = "my-other-vault", "my-other-vault-id"
@@ -116,6 +118,33 @@ func TestFindItem(t *testing.T) {
 			},
 		},
 		{
+			setupNote: "uuid: valid basic: one vault, one item, one field",
+			provider: &ProviderOnePassword{
+				vaults: map[string]int{myVaultUUID: 1},
+				client: fake.NewMockClient().
+					AddPredictableVaultUUID(myVaultUUID).
+					AddPredictableItemWithFieldUUID(myVaultUUID, myItemUUID, key1, value1),
+			},
+			checks: []check{
+				{
+					checkNote:    "pass",
+					findItemName: myItemUUID,
+					expectedErr:  nil,
+					expectedItem: &onepassword.Item{
+						ID:    myItemUUID,
+						Title: myItemUUID,
+						Vault: onepassword.ItemVault{ID: myVaultUUID},
+						Fields: []*onepassword.ItemField{
+							{
+								Label: key1,
+								Value: value1,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			setupNote: "multiple vaults, multiple items",
 			provider: &ProviderOnePassword{
 				vaults: map[string]int{myVault: 1, mySharedVault: 2},
@@ -178,7 +207,7 @@ func TestFindItem(t *testing.T) {
 				{
 					checkNote:    "two vaults",
 					findItemName: myItem,
-					expectedErr:  fmt.Errorf("key not found in 1Password Vaults: my-item in: map[my-shared-vault:2 my-vault:1]"),
+					expectedErr:  errors.New("key not found in 1Password Vaults: my-item in: map[my-shared-vault:2 my-vault:1]"),
 				},
 			},
 		},
@@ -326,78 +355,80 @@ func TestFindItem(t *testing.T) {
 	}
 
 	// run the tests
-	for _, tc := range testCases {
-		for _, check := range tc.checks {
-			got, err := tc.provider.findItem(check.findItemName)
-			notes := fmt.Sprintf(setupCheckFormat, tc.setupNote, check.checkNote)
-			if check.expectedErr == nil && err != nil {
-				// expected no error, got one
-				t.Errorf(findItemErrFormat, notes, nil, err)
-			}
-			if check.expectedErr != nil && err == nil {
-				// expected an error, didn't get one
-				t.Errorf(findItemErrFormat, notes, check.expectedErr.Error(), nil)
-			}
-			if check.expectedErr != nil && err != nil && err.Error() != check.expectedErr.Error() {
-				// expected an error, got the wrong one
-				t.Errorf(findItemErrFormat, notes, check.expectedErr.Error(), err.Error())
-			}
-			if check.expectedItem != nil {
-				if !reflect.DeepEqual(check.expectedItem, got) {
-					// expected a predefined item, got something else
-					t.Errorf(findItemErrFormat, notes, check.expectedItem, got)
+	for num, tc := range testCases {
+		t.Run(fmt.Sprintf("test-%d", num), func(t *testing.T) {
+			for _, check := range tc.checks {
+				got, err := tc.provider.findItem(check.findItemName)
+				notes := fmt.Sprintf(setupCheckFormat, tc.setupNote, check.checkNote)
+				if check.expectedErr == nil && err != nil {
+					// expected no error, got one
+					t.Errorf(findItemErrFormat, notes, nil, err)
+				}
+				if check.expectedErr != nil && err == nil {
+					// expected an error, didn't get one
+					t.Errorf(findItemErrFormat, notes, check.expectedErr.Error(), nil)
+				}
+				if check.expectedErr != nil && err != nil && err.Error() != check.expectedErr.Error() {
+					// expected an error, got the wrong one
+					t.Errorf(findItemErrFormat, notes, check.expectedErr.Error(), err.Error())
+				}
+				if check.expectedItem != nil {
+					if !reflect.DeepEqual(check.expectedItem, got) {
+						// expected a predefined item, got something else
+						t.Errorf(findItemErrFormat, notes, check.expectedItem, got)
+					}
 				}
 			}
-		}
+		})
 	}
 }
 
 func TestValidateStore(t *testing.T) {
 	type testCase struct {
 		checkNote    string
-		store        *esv1beta1.SecretStore
-		clusterStore *esv1beta1.ClusterSecretStore
+		store        *esv1.SecretStore
+		clusterStore *esv1.ClusterSecretStore
 		expectedErr  error
 	}
 
 	testCases := []testCase{
 		{
 			checkNote: "invalid: nil provider",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
+				Spec: esv1.SecretStoreSpec{
 					Provider: nil,
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreNilSpecProvider)),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New(errOnePasswordStoreNilSpecProvider)),
 		},
 		{
 			checkNote: "invalid: nil OnePassword provider spec",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
 						OnePassword: nil,
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreNilSpecProviderOnePassword)),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New(errOnePasswordStoreNilSpecProviderOnePassword)),
 		},
 		{
 			checkNote: "valid secretStore",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name: mySecret,
 										Key:  token,
@@ -416,15 +447,15 @@ func TestValidateStore(t *testing.T) {
 		},
 		{
 			checkNote: "invalid: illegal namespace on SecretStore",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name:      mySecret,
 										Namespace: pointer.To("my-namespace"),
@@ -441,19 +472,19 @@ func TestValidateStore(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf("namespace not allowed with namespaced SecretStore")),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New("namespace should either be empty or match the namespace of the SecretStore for a namespaced SecretStore")),
 		},
 		{
 			checkNote: "invalid: more than one vault with the same number",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name: mySecret,
 										Key:  token,
@@ -469,19 +500,19 @@ func TestValidateStore(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreNonUniqueVaultNumbers)),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New(errOnePasswordStoreNonUniqueVaultNumbers)),
 		},
 		{
 			checkNote: "valid: clusterSecretStore",
-			clusterStore: &esv1beta1.ClusterSecretStore{
+			clusterStore: &esv1.ClusterSecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "ClusterSecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name:      mySecret,
 										Namespace: pointer.To("my-namespace"),
@@ -501,15 +532,15 @@ func TestValidateStore(t *testing.T) {
 		},
 		{
 			checkNote: "invalid: clusterSecretStore without namespace",
-			clusterStore: &esv1beta1.ClusterSecretStore{
+			clusterStore: &esv1.ClusterSecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "ClusterSecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name: mySecret,
 										Key:  token,
@@ -525,19 +556,19 @@ func TestValidateStore(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf("cluster scope requires namespace")),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New("cluster scope requires namespace")),
 		},
 		{
 			checkNote: "invalid: missing connectTokenSecretRef.name",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Key: token,
 									},
@@ -552,19 +583,19 @@ func TestValidateStore(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreMissingRefName)),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New(errOnePasswordStoreMissingRefName)),
 		},
 		{
 			checkNote: "invalid: missing connectTokenSecretRef.key",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name: mySecret,
 									},
@@ -579,19 +610,19 @@ func TestValidateStore(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreMissingRefKey)),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New(errOnePasswordStoreMissingRefKey)),
 		},
 		{
 			checkNote: "invalid: at least one vault",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name: mySecret,
 										Key:  token,
@@ -604,19 +635,19 @@ func TestValidateStore(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreAtLeastOneVault)),
+			expectedErr: fmt.Errorf(errOnePasswordStore, errors.New(errOnePasswordStoreAtLeastOneVault)),
 		},
 		{
 			checkNote: "invalid: url",
-			store: &esv1beta1.SecretStore{
+			store: &esv1.SecretStore{
 				TypeMeta: metav1.TypeMeta{
 					Kind: "SecretStore",
 				},
-				Spec: esv1beta1.SecretStoreSpec{
-					Provider: &esv1beta1.SecretStoreProvider{
-						OnePassword: &esv1beta1.OnePasswordProvider{
-							Auth: &esv1beta1.OnePasswordAuth{
-								SecretRef: &esv1beta1.OnePasswordAuthSecretRef{
+				Spec: esv1.SecretStoreSpec{
+					Provider: &esv1.SecretStoreProvider{
+						OnePassword: &esv1.OnePasswordProvider{
+							Auth: &esv1.OnePasswordAuth{
+								SecretRef: &esv1.OnePasswordAuthSecretRef{
 									ConnectToken: esmeta.SecretKeySelector{
 										Name: mySecret,
 										Key:  token,
@@ -631,7 +662,7 @@ func TestValidateStore(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreInvalidConnectHost, fmt.Errorf("parse \":/invalid.invalid\": missing protocol scheme"))),
+			expectedErr: fmt.Errorf(errOnePasswordStore, fmt.Errorf(errOnePasswordStoreInvalidConnectHost, errors.New("parse \":/invalid.invalid\": missing protocol scheme"))),
 		},
 	}
 
@@ -667,7 +698,7 @@ func TestValidateStore(t *testing.T) {
 func TestGetSecret(t *testing.T) {
 	type check struct {
 		checkNote     string
-		ref           esv1beta1.ExternalSecretDataRemoteRef
+		ref           esv1.ExternalSecretDataRemoteRef
 		expectedValue string
 		expectedErr   error
 	}
@@ -685,16 +716,31 @@ func TestGetSecret(t *testing.T) {
 				vaults: map[string]int{myVault: 1},
 				client: fake.NewMockClient().
 					AddPredictableVault(myVault).
-					AddPredictableItemWithField(myVault, myItem, key1, value1).
+					AppendItem(myVaultID, onepassword.Item{
+						ID:    myItemID,
+						Title: myItem,
+						Vault: onepassword.ItemVault{ID: myVaultID},
+						Files: []*onepassword.File{
+							{
+								ID:   myFilePNGID,
+								Name: myFilePNG,
+							},
+						},
+					}).
 					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
 						Label: password,
 						Value: value2,
-					}),
+					}).
+					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
+						Label: key1,
+						Value: value1,
+					}).
+					SetFileContents(myFilePNG, []byte(myContents)),
 			},
 			checks: []check{
 				{
 					checkNote: key1,
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: key1,
 					},
@@ -702,8 +748,17 @@ func TestGetSecret(t *testing.T) {
 					expectedErr:   nil,
 				},
 				{
+					checkNote: key1 + " with prefix",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: fieldPrefix + prefixSplitter + key1,
+					},
+					expectedValue: value1,
+					expectedErr:   nil,
+				},
+				{
 					checkNote: "'password' (defaulted property)",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key: myItem,
 					},
 					expectedValue: value2,
@@ -711,12 +766,21 @@ func TestGetSecret(t *testing.T) {
 				},
 				{
 					checkNote: "'ref.version' not implemented",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: key1,
 						Version:  "123",
 					},
-					expectedErr: fmt.Errorf(errVersionNotImplemented),
+					expectedErr: errors.New(errVersionNotImplemented),
+				},
+				{
+					checkNote: "file named my-file.png with prefix",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: filePrefix + prefixSplitter + myFilePNG,
+					},
+					expectedValue: myContents,
+					expectedErr:   nil,
 				},
 			},
 		},
@@ -738,12 +802,25 @@ func TestGetSecret(t *testing.T) {
 							},
 						},
 					}).
+					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
+						Label: key1,
+						Value: value2,
+					}).
 					SetFileContents(myFilePNG, []byte(myContents)),
 			},
 			checks: []check{
 				{
+					checkNote: "field named password",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: fieldPrefix + prefixSplitter + key1,
+					},
+					expectedValue: value2,
+					expectedErr:   nil,
+				},
+				{
 					checkNote: "file named my-file.png",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: myFilePNG,
 					},
@@ -751,8 +828,17 @@ func TestGetSecret(t *testing.T) {
 					expectedErr:   nil,
 				},
 				{
+					checkNote: "file named my-file.png with prefix",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: filePrefix + prefixSplitter + myFilePNG,
+					},
+					expectedValue: myContents,
+					expectedErr:   nil,
+				},
+				{
 					checkNote: "empty ref.Property",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key: myItem,
 					},
 					expectedValue: myContents,
@@ -760,14 +846,23 @@ func TestGetSecret(t *testing.T) {
 				},
 				{
 					checkNote: "file non existent",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: "you-cant-find-me.png",
 					},
-					expectedErr: fmt.Errorf(errDocumentNotFound, fmt.Errorf("'my-item', 'you-cant-find-me.png'")),
+					expectedErr: fmt.Errorf(errDocumentNotFound, errors.New("'my-item', 'you-cant-find-me.png'")),
+				},
+				{
+					checkNote: "file non existent with prefix",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: "file/you-cant-find-me.png",
+					},
+					expectedErr: fmt.Errorf(errDocumentNotFound, errors.New("'my-item', 'you-cant-find-me.png'")),
 				},
 			},
 		},
+
 		{
 			setupNote: "one vault, one item, two fields w/ same Label",
 			provider: &ProviderOnePassword{
@@ -783,7 +878,7 @@ func TestGetSecret(t *testing.T) {
 			checks: []check{
 				{
 					checkNote: key1,
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: key1,
 					},
@@ -827,7 +922,7 @@ func TestGetSecret(t *testing.T) {
 func TestGetSecretMap(t *testing.T) {
 	type check struct {
 		checkNote   string
-		ref         esv1beta1.ExternalSecretDataRemoteRef
+		ref         esv1.ExternalSecretDataRemoteRef
 		expectedMap map[string][]byte
 		expectedErr error
 	}
@@ -845,16 +940,36 @@ func TestGetSecretMap(t *testing.T) {
 				vaults: map[string]int{myVault: 1},
 				client: fake.NewMockClient().
 					AddPredictableVault(myVault).
-					AddPredictableItemWithField(myVault, myItem, key1, value1).
+					AppendItem(myVaultID, onepassword.Item{
+						ID:    myItemID,
+						Title: myItem,
+						Vault: onepassword.ItemVault{ID: myVaultID},
+						Files: []*onepassword.File{
+							{
+								ID:   myFilePNGID,
+								Name: myFilePNG,
+							},
+							{
+								ID:   myFile2ID,
+								Name: myFile2PNG,
+							},
+						},
+					}).
+					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
+						Label: key1,
+						Value: value1,
+					}).
 					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
 						Label: password,
 						Value: value2,
-					}),
+					}).
+					SetFileContents(myFilePNG, []byte(myContents)).
+					SetFileContents(myFile2PNG, []byte(myContents2)),
 			},
 			checks: []check{
 				{
 					checkNote: "all Properties",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key: myItem,
 					},
 					expectedMap: map[string][]byte{
@@ -865,7 +980,7 @@ func TestGetSecretMap(t *testing.T) {
 				},
 				{
 					checkNote: "limit by Property",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: password,
 					},
@@ -876,12 +991,23 @@ func TestGetSecretMap(t *testing.T) {
 				},
 				{
 					checkNote: "'ref.version' not implemented",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: key1,
 						Version:  "123",
 					},
-					expectedErr: fmt.Errorf(errVersionNotImplemented),
+					expectedErr: errors.New(errVersionNotImplemented),
+				},
+				{
+					checkNote: "limit by Property with prefix",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: filePrefix + prefixSplitter + myFilePNG,
+					},
+					expectedMap: map[string][]byte{
+						myFilePNG: []byte(myContents),
+					},
+					expectedErr: nil,
 				},
 			},
 		},
@@ -907,13 +1033,17 @@ func TestGetSecretMap(t *testing.T) {
 							},
 						},
 					}).
+					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
+						Label: key1,
+						Value: value2,
+					}).
 					SetFileContents(myFilePNG, []byte(myContents)).
 					SetFileContents(myFile2PNG, []byte(myContents2)),
 			},
 			checks: []check{
 				{
 					checkNote: "all Properties",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key: myItem,
 					},
 					expectedMap: map[string][]byte{
@@ -924,12 +1054,34 @@ func TestGetSecretMap(t *testing.T) {
 				},
 				{
 					checkNote: "limit by Property",
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key:      myItem,
 						Property: myFilePNG,
 					},
 					expectedMap: map[string][]byte{
 						myFilePNG: []byte(myContents),
+					},
+					expectedErr: nil,
+				},
+				{
+					checkNote: "limit by Property with prefix",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: filePrefix + prefixSplitter + myFilePNG,
+					},
+					expectedMap: map[string][]byte{
+						myFilePNG: []byte(myContents),
+					},
+					expectedErr: nil,
+				},
+				{
+					checkNote: "get field limit by Property",
+					ref: esv1.ExternalSecretDataRemoteRef{
+						Key:      myItem,
+						Property: fieldPrefix + prefixSplitter + key1,
+					},
+					expectedMap: map[string][]byte{
+						key1: []byte(value2),
 					},
 					expectedErr: nil,
 				},
@@ -950,7 +1102,7 @@ func TestGetSecretMap(t *testing.T) {
 			checks: []check{
 				{
 					checkNote: key1,
-					ref: esv1beta1.ExternalSecretDataRemoteRef{
+					ref: esv1.ExternalSecretDataRemoteRef{
 						Key: myItem,
 					},
 					expectedMap: nil,
@@ -988,7 +1140,7 @@ func TestGetSecretMap(t *testing.T) {
 func TestGetAllSecrets(t *testing.T) {
 	type check struct {
 		checkNote   string
-		ref         esv1beta1.ExternalSecretFind
+		ref         esv1.ExternalSecretFind
 		expectedMap map[string][]byte
 		expectedErr error
 	}
@@ -998,7 +1150,6 @@ func TestGetAllSecrets(t *testing.T) {
 		provider  *ProviderOnePassword
 		checks    []check
 	}
-
 	testCases := []testCase{
 		{
 			setupNote: "three vaults, three items, all different field Labels",
@@ -1027,7 +1178,7 @@ func TestGetAllSecrets(t *testing.T) {
 			checks: []check{
 				{
 					checkNote: "find some with path only",
-					ref: esv1beta1.ExternalSecretFind{
+					ref: esv1.ExternalSecretFind{
 						Path: pointer.To(myItem),
 					},
 					expectedMap: map[string][]byte{
@@ -1038,8 +1189,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find most with regex 'key*'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "key*",
 						},
 					},
@@ -1053,8 +1204,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find some with regex 'key*' and path 'my-other-item'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "key*",
 						},
 						Path: pointer.To(myOtherItem),
@@ -1067,8 +1218,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find none with regex 'asdf*'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "asdf*",
 						},
 					},
@@ -1077,8 +1228,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find none with path 'no-exist'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "key*",
 						},
 						Path: pointer.To("no-exist"),
@@ -1086,17 +1237,79 @@ func TestGetAllSecrets(t *testing.T) {
 					expectedMap: map[string][]byte{},
 					expectedErr: nil,
 				},
+			},
+		},
+		{
+			setupNote: "one vault, three items, find by tags",
+			provider: &ProviderOnePassword{
+				vaults: map[string]int{myVault: 1},
+				client: fake.NewMockClient().
+					AddPredictableVault(myVault).
+					AppendItem(myVaultID, onepassword.Item{
+						ID:    myItemID,
+						Title: myItem,
+						Tags:  []string{"foo", "bar"},
+						Vault: onepassword.ItemVault{ID: myVaultID},
+					}).
+					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
+						Label: key1,
+						Value: value1,
+					}).
+					AppendItemField(myVaultID, myItemID, onepassword.ItemField{
+						Label: key2,
+						Value: value2,
+					}).
+					AppendItem(myVaultID, onepassword.Item{
+						ID:    "my-item-id-2",
+						Title: "my-item-2",
+						Vault: onepassword.ItemVault{ID: myVaultID},
+						Tags:  []string{"foo", "baz"},
+					}).
+					AppendItemField(myVaultID, "my-item-id-2", onepassword.ItemField{
+						Label: key3,
+						Value: value3,
+					}).
+					AppendItem(myVaultID, onepassword.Item{
+						ID:    "my-item-id-3",
+						Title: "my-item-3",
+						Vault: onepassword.ItemVault{ID: myVaultID},
+						Tags:  []string{"bang", "bing"},
+					}).
+					AppendItemField(myVaultID, "my-item-id-3", onepassword.ItemField{
+						Label: key4,
+						Value: value4,
+					}),
+			},
+			checks: []check{
 				{
-					checkNote: "error when find.tags",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
-							RegExp: "key*",
-						},
+					checkNote: "find with tags",
+					ref: esv1.ExternalSecretFind{
+						Path: pointer.To(myItem),
 						Tags: map[string]string{
-							"asdf": "fdas",
+							"foo": "true",
+							"bar": "true",
 						},
 					},
-					expectedErr: fmt.Errorf(errTagsNotImplemented),
+					expectedMap: map[string][]byte{
+						key1: []byte(value1),
+						key2: []byte(value2),
+					},
+					expectedErr: nil,
+				},
+				{
+					checkNote: "find with tags and get all",
+					ref: esv1.ExternalSecretFind{
+						Path: pointer.To(myItem),
+						Tags: map[string]string{
+							"foo": "true",
+						},
+					},
+					expectedMap: map[string][]byte{
+						key1: []byte(value1),
+						key2: []byte(value2),
+						key3: []byte(value3),
+					},
+					expectedErr: nil,
 				},
 			},
 		},
@@ -1172,8 +1385,8 @@ func TestGetAllSecrets(t *testing.T) {
 			checks: []check{
 				{
 					checkNote: "find most with regex '^my-*'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "^my-*",
 						},
 					},
@@ -1187,8 +1400,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find some with regex '^my-*' and path 'my-other-item'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "^my-*",
 						},
 						Path: pointer.To(myOtherItem),
@@ -1200,8 +1413,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find none with regex '^asdf*'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "^asdf*",
 						},
 					},
@@ -1210,8 +1423,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find none with path 'no-exist'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "^my-*",
 						},
 						Path: pointer.To("no-exist"),
@@ -1274,8 +1487,8 @@ func TestGetAllSecrets(t *testing.T) {
 			checks: []check{
 				{
 					checkNote: "find fields with regex '^key*'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "^key*",
 						},
 					},
@@ -1286,8 +1499,8 @@ func TestGetAllSecrets(t *testing.T) {
 				},
 				{
 					checkNote: "find files with regex '^file*item*'",
-					ref: esv1beta1.ExternalSecretFind{
-						Name: &esv1beta1.FindName{
+					ref: esv1.ExternalSecretFind{
+						Name: &esv1.FindName{
 							RegExp: "^file*",
 						},
 					},
@@ -1418,6 +1631,7 @@ type fakeRef struct {
 	key       string
 	prop      string
 	secretKey string
+	metadata  *apiextensionsv1.JSON
 }
 
 func (f fakeRef) GetRemoteKey() string {
@@ -1433,7 +1647,7 @@ func (f fakeRef) GetSecretKey() string {
 }
 
 func (f fakeRef) GetMetadata() *apiextensionsv1.JSON {
-	return nil
+	return f.metadata
 }
 
 func validateItem(t *testing.T, expectedItem, actualItem *onepassword.Item) {
@@ -1450,11 +1664,22 @@ func TestProviderOnePasswordCreateItem(t *testing.T) {
 		setupNote          string
 		val                []byte
 		createValidateFunc func(*testing.T, *onepassword.Item, string) (*onepassword.Item, error)
-		ref                esv1beta1.PushSecretData
+		ref                esv1.PushSecretData
 	}
 	const vaultName = "vault1"
+	const fallbackVaultName = "vault2"
 
 	thridPartyErr := errors.New("third party error")
+
+	metadata := &metadata.PushSecretMetadata[PushSecretMetadataSpec]{
+		APIVersion: metadata.APIVersion,
+		Kind:       metadata.Kind,
+		Spec: PushSecretMetadataSpec{
+			Tags:  []string{"tag1", "tag2"},
+			Vault: fallbackVaultName,
+		},
+	}
+	metadataRaw, _ := json.Marshal(metadata)
 
 	testCases := []testCase{
 		{
@@ -1466,7 +1691,8 @@ func TestProviderOnePasswordCreateItem(t *testing.T) {
 			},
 			expectedErr: nil,
 			vaults: map[string]int{
-				vaultName: 1,
+				vaultName:         1,
+				fallbackVaultName: 2,
 			},
 			createValidateFunc: func(t *testing.T, item *onepassword.Item, s string) (*onepassword.Item, error) {
 				validateItem(t, &onepassword.Item{
@@ -1543,6 +1769,36 @@ func TestProviderOnePasswordCreateItem(t *testing.T) {
 					},
 				}, item)
 				return nil, thridPartyErr
+			},
+		},
+		{
+			setupNote: "valid metadata overrides",
+			val:       []byte("testing"),
+			ref: fakeRef{
+				key:  "another",
+				prop: "property",
+				metadata: &apiextensionsv1.JSON{
+					Raw: metadataRaw,
+				},
+			},
+			vaults: map[string]int{
+				vaultName:         1,
+				fallbackVaultName: 2,
+			},
+			expectedErr: nil,
+			createValidateFunc: func(t *testing.T, item *onepassword.Item, s string) (*onepassword.Item, error) {
+				validateItem(t, &onepassword.Item{
+					Title:    "another",
+					Category: onepassword.Server,
+					Vault: onepassword.ItemVault{
+						ID: fallbackVaultName,
+					},
+					Fields: []*onepassword.ItemField{
+						generateNewItemField("property", "testing"),
+					},
+					Tags: []string{"tag1", "tag2"},
+				}, item)
+				return item, nil
 			},
 		},
 	}
@@ -1929,6 +2185,16 @@ func TestProviderOnePasswordPushSecret(t *testing.T) {
 			ID: vaultName,
 		}
 	)
+
+	metadata := &metadata.PushSecretMetadata[PushSecretMetadataSpec]{
+		APIVersion: metadata.APIVersion,
+		Kind:       metadata.Kind,
+		Spec: PushSecretMetadataSpec{
+			Tags: []string{"tag1", "tag2"},
+		},
+	}
+	metadataRaw, _ := json.Marshal(metadata)
+
 	testCases := []testCase{
 		{
 			vaults: map[string]int{
@@ -2075,6 +2341,38 @@ func TestProviderOnePasswordPushSecret(t *testing.T) {
 					ID:    key1,
 					Title: key1,
 				},
+			},
+		},
+		{
+			setupNote:   "create item with metadata overwrites success",
+			expectedErr: nil,
+			val: &corev1.Secret{Data: map[string][]byte{
+				key1: []byte("testing"),
+			}},
+			ref: fakeRef{
+				key:       key1,
+				prop:      "prop",
+				secretKey: key1,
+				metadata: &apiextensionsv1.JSON{
+					Raw: metadataRaw,
+				},
+			},
+			vaults: map[string]int{
+				vaultName: 1,
+			},
+			createValidateFunc: func(item *onepassword.Item, s string) (*onepassword.Item, error) {
+				validateItem(t, &onepassword.Item{
+					Title:    key1,
+					Category: onepassword.Server,
+					Vault: onepassword.ItemVault{
+						ID: vaultName,
+					},
+					Fields: []*onepassword.ItemField{
+						generateNewItemField("prop", "testing"),
+					},
+					Tags: []string{"tag1", "tag2"},
+				}, item)
+				return item, nil
 			},
 		},
 	}

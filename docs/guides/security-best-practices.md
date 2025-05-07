@@ -31,23 +31,35 @@ spec:
 
 ### 3. Selectively Disable Reconciliation of Cluster-Wide Resources
 
-ESO allows you to selectively disable the reconciliation of cluster-wide resources such as `ClusterSecretStore`, `ClusterExternalSecret`, and `PushSecret`. You can disable the installation of CRDs in the Helm chart or disable reconciliation in the core-controller using the following options:
+ESO allows you to selectively disable the reconciliation of cluster-wide resources `ClusterSecretStore`, `ClusterExternalSecret`, and `PushSecret`.
+You can disable the installation of CRDs and reconciliation in the Helm chart, or disable reconciliation in the core controller.
 
-To disable CRD installation:
+To disable reconciliation in the Helm chart:
 
 ```yaml
-# disable cluster-wide resources & push secret
+processClusterExternalSecret: false
+processClusterStore: false
+processPushSecret: false
+```
+
+To disable CRD installation in the Helm chart:
+
+```yaml
 crds:
   createClusterExternalSecret: false
   createClusterSecretStore: false
   createPushSecret: false
 ```
 
-To disable reconciliation in the core-controller:
+Note that disabling CRD installation for a cluster-wide resource does not automatically disable its reconciliation.
+The core controller will issue error logs if the CRD is not installed but the reconciliation is not disabled.
+
+To disable reconciliation in the core controller, set the following flags:
 
 ```
---enable-cluster-external-secret-reconciler
---enable-cluster-store-reconciler
+--enable-cluster-external-secret-reconciler=false
+--enable-cluster-store-reconciler=false
+--enable-push-secret-reconciler=false
 ```
 
 ### 4. Implement Namespace-Scoped Installation
@@ -63,6 +75,14 @@ scopedRBAC: true
 scopedNamespace: my-namespace
 ```
 
+### 5. Restrict Webhook TLS Ciphers
+
+Consider installing ESO restricting webhook ciphers. Use the following Helm values to scope webhook for specific TLS ciphers:
+```yaml
+webhook:
+  extraArgs:
+    tls-ciphers: "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+```
 ## Pod Security
 
 The Pods of the External Secrets Operator have been configured to meet the [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/), specifically the restricted profile. This configuration ensures a strong security posture by implementing recommended best practices for hardening Pods, including those outlined in the [NSA Kubernetes Hardening Guide](https://media.defense.gov/2022/Aug/29/2003066362/-1/-1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF).

@@ -5,11 +5,11 @@ SHELL         := /bin/bash
 MAKEFLAGS     += --warn-undefined-variables
 .SHELLFLAGS   := -euo pipefail -c
 
-ARCH ?= amd64 arm64
+ARCH ?= amd64 arm64 ppc64le
 BUILD_ARGS ?= CGO_ENABLED=0
 DOCKER_BUILD_ARGS ?=
 DOCKERFILE ?= Dockerfile
-
+DOCKER ?= docker
 # default target is build
 .DEFAULT_GOAL := all
 .PHONY: all
@@ -72,7 +72,7 @@ FAIL	= (echo ${TIME} ${RED}[FAIL]${CNone} && false)
 # ====================================================================================
 # Conformance
 
-reviewable: generate docs manifests helm.generate helm.docs lint ## Ensure a PR is ready for review.
+reviewable: generate docs manifests helm.generate helm.schema.update helm.docs lint ## Ensure a PR is ready for review.
 	@go mod tidy
 	@cd e2e/ && go mod tidy
 
@@ -107,6 +107,18 @@ test.e2e.managed: generate ## Run e2e tests managed
 	@$(INFO) go test e2e-tests-managed
 	$(MAKE) -C ./e2e test.managed
 	@$(OK) go test e2e-tests-managed
+
+.PHONY: test.crds
+test.crds: cty crds.generate.tests ## Test CRDs for modification and backwards compatibility
+	@$(INFO) $(CTY) test tests
+	$(CTY) test tests
+	@$(OK) No breaking CRD changes detected
+
+.PHONY: test.crds.update
+test.crds.update: cty crds.generate.tests ## Update the snapshots used by the CRD tests
+	@$(INFO) $(CTY) test tests -u
+	$(CTY) test tests -u
+	@$(OK) Successfully updated all test snapshots
 
 .PHONY: build
 build: $(addprefix build-,$(ARCH)) ## Build binary
@@ -146,6 +158,7 @@ run: generate ## Run app locally (without a k8s cluster)
 
 manifests: helm.generate ## Generate manifests from helm chart
 	mkdir -p $(OUTPUT_DIR)/deploy/manifests
+	helm dependency build $(HELM_DIR)
 	helm template external-secrets $(HELM_DIR) -f deploy/manifests/helm-values.yaml > $(OUTPUT_DIR)/deploy/manifests/external-secrets.yaml
 
 crds.install: generate ## Install CRDs into a cluster. This is for convenience
@@ -153,6 +166,10 @@ crds.install: generate ## Install CRDs into a cluster. This is for convenience
 
 crds.uninstall: ## Uninstall CRDs from a cluster. This is for convenience
 	kubectl delete -f $(BUNDLE_DIR)
+
+crds.generate.tests:
+	./hack/test.crds.generate.sh $(BUNDLE_DIR) tests/crds
+	@$(OK) Finished generating crds for testing
 
 tilt-up: tilt manifests ## Generates the local manifests that tilt will use to deploy the controller's objects.
 	$(LOCALBIN)/tilt up
@@ -162,7 +179,7 @@ tilt-up: tilt manifests ## Generates the local manifests that tilt will use to d
 
 helm.docs: ## Generate helm docs
 	@cd $(HELM_DIR); \
-	docker run --rm -v $(shell pwd)/$(HELM_DIR):/helm-docs -u $(shell id -u) jnorwood/helm-docs:v1.5.0
+	$(DOCKER) run --rm -v $(shell pwd)/$(HELM_DIR):/helm-docs -u $(shell id -u) docker.io/jnorwood/helm-docs:v1.7.0
 
 HELM_VERSION ?= $(shell helm show chart $(HELM_DIR) | grep 'version:' | sed 's/version: //g')
 
@@ -172,15 +189,25 @@ helm.build: helm.generate ## Build helm chart
 	@mv $(OUTPUT_DIR)/chart/external-secrets-$(HELM_VERSION).tgz $(OUTPUT_DIR)/chart/external-secrets.tgz
 	@$(OK) helm package
 
+helm.schema.plugin:
+	@$(INFO) Installing helm-values-schema-json plugin
+	@helm plugin install https://github.com/losisin/helm-values-schema-json.git || true
+	@$(OK) Installed helm-values-schema-json plugin
+
+helm.schema.update: helm.schema.plugin
+	@$(INFO) Generating values.schema.json
+	@helm schema -input $(HELM_DIR)/values.yaml -output $(HELM_DIR)/values.schema.json
+	@$(OK) Generated values.schema.json
+
 helm.generate:
 	./hack/helm.generate.sh $(BUNDLE_DIR) $(HELM_DIR)
 	@$(OK) Finished generating helm chart files
 
 helm.test: helm.generate
-	@helm unittest --file tests/*.yaml --file 'tests/**/*.yaml' deploy/charts/external-secrets/
+	@helm unittest deploy/charts/external-secrets/
 
 helm.test.update: helm.generate
-	@helm unittest -u --file tests/*.yaml --file 'tests/**/*.yaml' deploy/charts/external-secrets/
+	@helm unittest -u deploy/charts/external-secrets/
 
 helm.update.appversion:
 	@chartversion=$$(yq .version ./deploy/charts/external-secrets/Chart.yaml) ; \
@@ -226,16 +253,16 @@ docker.tag:  ## Emit IMAGE_TAG
 
 .PHONY: docker.build
 docker.build: $(addprefix build-,$(ARCH)) ## Build the docker image
-	@$(INFO) docker build
-	echo docker build -f $(DOCKERFILE) . $(DOCKER_BUILD_ARGS) -t $(IMAGE_NAME):$(IMAGE_TAG)
-	DOCKER_BUILDKIT=1 docker build -f $(DOCKERFILE) . $(DOCKER_BUILD_ARGS) -t $(IMAGE_NAME):$(IMAGE_TAG)
-	@$(OK) docker build
+	@$(INFO) $(DOCKER) build
+	echo $(DOCKER) build -f $(DOCKERFILE) . $(DOCKER_BUILD_ARGS) -t $(IMAGE_NAME):$(IMAGE_TAG)
+	DOCKER_BUILDKIT=1 $(DOCKER) build -f $(DOCKERFILE) . $(DOCKER_BUILD_ARGS) -t $(IMAGE_NAME):$(IMAGE_TAG)
+	@$(OK) $(DOCKER) build
 
 .PHONY: docker.push
 docker.push: ## Push the docker image to the registry
-	@$(INFO) docker push
-	@docker push $(IMAGE_NAME):$(IMAGE_TAG)
-	@$(OK) docker push
+	@$(INFO) $(DOCKER) push
+	@$(DOCKER) push $(IMAGE_NAME):$(IMAGE_TAG)
+	@$(OK) $(DOCKER) push
 
 # RELEASE_TAG is tag to promote. Default is promoting to main branch, but can be overriden
 # to promote a tag to a specific version.
@@ -245,34 +272,34 @@ SOURCE_TAG ?= $(VERSION)$(TAG_SUFFIX)
 .PHONY: docker.promote
 docker.promote: ## Promote the docker image to the registry
 	@$(INFO) promoting $(SOURCE_TAG) to $(RELEASE_TAG)
-	docker manifest inspect --verbose $(IMAGE_NAME):$(SOURCE_TAG) > .tagmanifest
+	$(DOCKER) manifest inspect --verbose $(IMAGE_NAME):$(SOURCE_TAG) > .tagmanifest
 	for digest in $$(jq -r 'if type=="array" then .[].Descriptor.digest else .Descriptor.digest end' < .tagmanifest); do \
-		docker pull $(IMAGE_NAME)@$$digest; \
+		$(DOCKER) pull $(IMAGE_NAME)@$$digest; \
 	done
-	docker manifest create $(IMAGE_NAME):$(RELEASE_TAG) \
+	$(DOCKER) manifest create $(IMAGE_NAME):$(RELEASE_TAG) \
 		$$(jq -j '"--amend $(IMAGE_NAME)@" + if type=="array" then .[].Descriptor.digest else .Descriptor.digest end + " "' < .tagmanifest)
-	docker manifest push $(IMAGE_NAME):$(RELEASE_TAG)
-	@$(OK) docker push $(RELEASE_TAG) \
+	$(DOCKER) manifest push $(IMAGE_NAME):$(RELEASE_TAG)
+	@$(OK) $(DOCKER) push $(RELEASE_TAG) \
 
 # ====================================================================================
 # Terraform
 
-tf.plan.%: ## Runs terrform plan for a provider
+tf.plan.%: ## Runs terraform plan for a provider
 	@cd $(TF_DIR)/$*; \
 	terraform init; \
 	terraform plan
 
-tf.apply.%: ## Runs terrform apply for a provider
+tf.apply.%: ## Runs terraform apply for a provider
 	@cd $(TF_DIR)/$*; \
 	terraform init; \
 	terraform apply -auto-approve
 
-tf.destroy.%: ## Runs terrform destroy for a provider
+tf.destroy.%: ## Runs terraform destroy for a provider
 	@cd $(TF_DIR)/$*; \
 	terraform init; \
 	terraform destroy -auto-approve
 
-tf.show.%: ## Runs terrform show for a provider and outputs to a file
+tf.show.%: ## Runs terraform show for a provider and outputs to a file
 	@cd $(TF_DIR)/$*; \
 	terraform init; \
 	terraform plan -out tfplan.binary; \
@@ -298,15 +325,19 @@ clean:  ## Clean bins
 
 ifeq ($(OS),Windows_NT)     # is Windows_NT on XP, 2000, 7, Vista, 10...
     detected_OS := windows
+    real_OS := windows
     arch := x86_64
 else
     detected_OS := $(shell uname -s)
+    real_OS := $(detected_OS)
     arch := $(shell uname -m)
     ifeq ($(detected_OS),Darwin)
-    	detected_OS := mac
+        detected_OS := mac
+        real_OS := darwin
     endif
     ifeq ($(detected_OS),Linux)
-    	detected_OS := linux
+        detected_OS := linux
+        real_OS := linux
     endif
 endif
 
@@ -317,13 +348,15 @@ $(LOCALBIN):
 
 ## Tool Binaries
 TILT ?= $(LOCALBIN)/tilt
+CTY ?= $(LOCALBIN)/cty
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
-GOLANGCI_VERSION := 1.57.2
+GOLANGCI_VERSION := 2.1.6
 KUBERNETES_VERSION := 1.30.x
-TILT_VERSION := 0.33.10
+TILT_VERSION := 0.33.21
+CTY_VERSION := 1.1.3
 
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
@@ -334,7 +367,7 @@ $(ENVTEST): $(LOCALBIN)
 .PHONY: $(GOLANGCI_LINT)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
-	test -s $(LOCALBIN)/golangci-lint && $(LOCALBIN)/golangci-lint version --format short | grep -q $(GOLANGCI_VERSION) || \
+	test -s $(LOCALBIN)/golangci-lint && $(LOCALBIN)/golangci-lint version | grep -q $(GOLANGCI_VERSION) || \
 	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LOCALBIN) v$(GOLANGCI_VERSION)
 
 .PHONY: tilt
@@ -342,3 +375,9 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 tilt: $(TILT) ## Download tilt locally if necessary. Architecture is locked at x86_64.
 $(TILT): $(LOCALBIN)
 	test -s $(LOCALBIN)/tilt || curl -fsSL https://github.com/tilt-dev/tilt/releases/download/v$(TILT_VERSION)/tilt.$(TILT_VERSION).$(detected_OS).$(arch).tar.gz | tar -xz -C $(LOCALBIN) tilt
+
+.PHONY: cty
+.PHONY: $(CTY)
+cty: $(CTY) ## Download cty locally if necessary. Architecture is locked at x86_64.
+$(CTY): $(LOCALBIN)
+	test -s $(LOCALBIN)/cty || curl -fsSL https://github.com/Skarlso/crd-to-sample-yaml/releases/download/v$(CTY_VERSION)/cty_$(real_OS)_amd64.tar.gz | tar -xz -C $(LOCALBIN) cty

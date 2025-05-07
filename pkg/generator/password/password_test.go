@@ -15,7 +15,7 @@ limitations under the License.
 package password
 
 import (
-	"fmt"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -103,7 +103,7 @@ func TestGenerate(t *testing.T) {
 				},
 				passGen: func(len int, symbols int, symbolCharacters string, digits int, noUpper bool, allowRepeat bool,
 				) (string, error) {
-					return "", fmt.Errorf("boom")
+					return "", errors.New("boom")
 				},
 			},
 			wantErr: true,
@@ -112,7 +112,7 @@ func TestGenerate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &Generator{}
-			got, err := g.generate(tt.args.jsonSpec, tt.args.passGen)
+			got, _, err := g.generate(tt.args.jsonSpec, tt.args.passGen)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Generator.Generate() error = %v, wantErr %v", err, tt.wantErr)
 				return

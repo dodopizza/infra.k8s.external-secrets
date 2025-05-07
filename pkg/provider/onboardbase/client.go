@@ -17,6 +17,7 @@ package onboardbase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -27,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	"github.com/external-secrets/external-secrets/pkg/find"
 	onboardbaseClient "github.com/external-secrets/external-secrets/pkg/provider/onboardbase/client"
 	"github.com/external-secrets/external-secrets/pkg/utils"
@@ -53,7 +54,7 @@ type Client struct {
 	environment         string
 
 	kube      kclient.Client
-	store     *esv1beta1.OnboardbaseProvider
+	store     *esv1.OnboardbaseProvider
 	namespace string
 	storeKind string
 }
@@ -71,16 +72,16 @@ func (c *Client) setAuth(ctx context.Context) error {
 	credentialsSecret := &corev1.Secret{}
 	credentialsSecretName := c.store.Auth.OnboardbaseAPIKeyRef.Name
 	if credentialsSecretName == "" {
-		return fmt.Errorf(errOnboardbaseAPIKeySecretName)
+		return errors.New(errOnboardbaseAPIKeySecretName)
 	}
 	objectKey := types.NamespacedName{
 		Name:      credentialsSecretName,
 		Namespace: c.namespace,
 	}
 	// only ClusterStore is allowed to set namespace (and then it's required)
-	if c.storeKind == esv1beta1.ClusterSecretStoreKind {
+	if c.storeKind == esv1.ClusterSecretStoreKind {
 		if c.store.Auth.OnboardbaseAPIKeyRef.Namespace == nil {
-			return fmt.Errorf(errInvalidClusterStoreMissingOnboardbaseAPIKeyNamespace)
+			return errors.New(errInvalidClusterStoreMissingOnboardbaseAPIKeyNamespace)
 		}
 		objectKey.Namespace = *c.store.Auth.OnboardbaseAPIKeyRef.Namespace
 	}
@@ -106,37 +107,37 @@ func (c *Client) setAuth(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) Validate() (esv1beta1.ValidationResult, error) {
+func (c *Client) Validate() (esv1.ValidationResult, error) {
 	timeout := 15 * time.Second
 	clientURL := c.onboardbase.BaseURL().String()
 
 	if err := utils.NetworkValidate(clientURL, timeout); err != nil {
-		return esv1beta1.ValidationResultError, err
+		return esv1.ValidationResultError, err
 	}
 
 	if err := c.onboardbase.Authenticate(); err != nil {
-		return esv1beta1.ValidationResultError, err
+		return esv1.ValidationResultError, err
 	}
 
-	return esv1beta1.ValidationResultReady, nil
+	return esv1.ValidationResultReady, nil
 }
 
-func (c *Client) DeleteSecret(_ context.Context, _ esv1beta1.PushSecretRemoteRef) error {
+func (c *Client) DeleteSecret(_ context.Context, _ esv1.PushSecretRemoteRef) error {
 	// not implemented
 	return nil
 }
 
-func (c *Client) SecretExists(_ context.Context, _ esv1beta1.PushSecretRemoteRef) (bool, error) {
+func (c *Client) SecretExists(_ context.Context, _ esv1.PushSecretRemoteRef) (bool, error) {
 	// not implemented
 	return false, nil
 }
 
-func (c *Client) PushSecret(_ context.Context, _ *corev1.Secret, _ esv1beta1.PushSecretData) error {
+func (c *Client) PushSecret(_ context.Context, _ *corev1.Secret, _ esv1.PushSecretData) error {
 	// not implemented
 	return nil
 }
 
-func (c *Client) GetSecret(_ context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) ([]byte, error) {
+func (c *Client) GetSecret(_ context.Context, ref esv1.ExternalSecretDataRemoteRef) ([]byte, error) {
 	request := onboardbaseClient.SecretRequest{
 		Project:     c.project,
 		Environment: c.environment,
@@ -161,7 +162,7 @@ func (c *Client) GetSecret(_ context.Context, ref esv1beta1.ExternalSecretDataRe
 	return []byte(value), nil
 }
 
-func (c *Client) GetSecretMap(ctx context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
+func (c *Client) GetSecretMap(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
 	data, err := c.GetSecret(ctx, ref)
 	if err != nil {
 		return nil, err
@@ -186,9 +187,9 @@ func (c *Client) GetSecretMap(ctx context.Context, ref esv1beta1.ExternalSecretD
 	return secretData, nil
 }
 
-func (c *Client) GetAllSecrets(ctx context.Context, ref esv1beta1.ExternalSecretFind) (map[string][]byte, error) {
+func (c *Client) GetAllSecrets(ctx context.Context, ref esv1.ExternalSecretFind) (map[string][]byte, error) {
 	if len(ref.Tags) > 0 {
-		return nil, fmt.Errorf("find by tags not supported")
+		return nil, errors.New("find by tags not supported")
 	}
 
 	secrets, err := c.getSecrets(ctx)

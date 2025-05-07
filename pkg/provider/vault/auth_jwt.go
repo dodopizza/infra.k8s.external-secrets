@@ -16,10 +16,11 @@ package vault
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	"github.com/external-secrets/external-secrets/pkg/constants"
 	"github.com/external-secrets/external-secrets/pkg/metrics"
 	"github.com/external-secrets/external-secrets/pkg/utils/resolvers"
@@ -41,7 +42,7 @@ func setJwtAuthToken(ctx context.Context, v *client) (bool, error) {
 	return false, nil
 }
 
-func (c *client) requestTokenWithJwtAuth(ctx context.Context, jwtAuth *esv1beta1.VaultJwtAuth) error {
+func (c *client) requestTokenWithJwtAuth(ctx context.Context, jwtAuth *esv1.VaultJwtAuth) error {
 	role := strings.TrimSpace(jwtAuth.Role)
 	var jwt string
 	var err error
@@ -66,7 +67,7 @@ func (c *client) requestTokenWithJwtAuth(ctx context.Context, jwtAuth *esv1beta1
 			*audiences,
 			*expirationSeconds)
 	} else {
-		err = fmt.Errorf(errJwtNoTokenSource)
+		err = errors.New(errJwtNoTokenSource)
 	}
 	if err != nil {
 		return err

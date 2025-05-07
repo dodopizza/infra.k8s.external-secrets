@@ -26,7 +26,7 @@ import (
 	vault "github.com/hashicorp/vault/api"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	testingfake "github.com/external-secrets/external-secrets/pkg/provider/testing/fake"
 	"github.com/external-secrets/external-secrets/pkg/provider/vault/fake"
 	"github.com/external-secrets/external-secrets/pkg/provider/vault/util"
@@ -60,11 +60,11 @@ func TestGetSecret(t *testing.T) {
 	}
 
 	type args struct {
-		store    *esv1beta1.VaultProvider
+		store    *esv1.VaultProvider
 		kube     kclient.Client
 		vLogical util.Logical
 		ns       string
-		data     esv1beta1.ExternalSecretDataRemoteRef
+		data     esv1.ExternalSecretDataRemoteRef
 	}
 
 	type want struct {
@@ -80,8 +80,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecret": {
 			reason: "Should return the secret with property",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "access_key",
 				},
 				vLogical: &fake.Logical{
@@ -96,8 +96,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretWithNil": {
 			reason: "Should return the secret with property if it has a nil val",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "access_key",
 				},
 				vLogical: &fake.Logical{
@@ -112,8 +112,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretWithoutProperty": {
 			reason: "Should return the json encoded secret without property",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data:  esv1beta1.ExternalSecretDataRemoteRef{},
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data:  esv1.ExternalSecretDataRemoteRef{},
 				vLogical: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(secret, nil),
 				},
@@ -126,8 +126,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretWithNestedValue": {
 			reason: "Should return a nested property",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "nested.foo",
 				},
 				vLogical: &fake.Logical{
@@ -142,8 +142,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretWithNestedValueFromData": {
 			reason: "Should return a nested property",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					//
 					Property: "nested.bar",
 				},
@@ -159,8 +159,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretWithMissingValueFromData": {
 			reason: "Should return a NoSecretErr",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "not-relevant",
 				},
 				vLogical: &fake.Logical{
@@ -168,15 +168,15 @@ func TestGetSecret(t *testing.T) {
 				},
 			},
 			want: want{
-				err: esv1beta1.NoSecretErr,
+				err: esv1.NoSecretErr,
 				val: nil,
 			},
 		},
 		"ReadSecretWithSliceValue": {
 			reason: "Should return property as a joined slice",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "list_of_values",
 				},
 				vLogical: &fake.Logical{
@@ -191,8 +191,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretWithJsonNumber": {
 			reason: "Should return parsed json.Number property",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "json_number",
 				},
 				vLogical: &fake.Logical{
@@ -207,8 +207,8 @@ func TestGetSecret(t *testing.T) {
 		"NonexistentProperty": {
 			reason: "Should return error property does not exist.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "nop.doesnt.exist",
 				},
 				vLogical: &fake.Logical{
@@ -234,8 +234,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretNotFound": {
 			reason: "Secret doesn't exist",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "access_key",
 				},
 				vLogical: &fake.Logical{
@@ -245,14 +245,14 @@ func TestGetSecret(t *testing.T) {
 				},
 			},
 			want: want{
-				err: esv1beta1.NoSecretError{},
+				err: esv1.NoSecretError{},
 			},
 		},
 		"ReadSecretMetadataWithoutProperty": {
 			reason: "Should return the json encoded metadata",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					MetadataPolicy: "Fetch",
 				},
 				vLogical: &fake.Logical{
@@ -267,8 +267,8 @@ func TestGetSecret(t *testing.T) {
 		"ReadSecretMetadataWithProperty": {
 			reason: "Should return the access_key value from the metadata",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					MetadataPolicy: "Fetch",
 					Property:       "access_key",
 				},
@@ -284,8 +284,8 @@ func TestGetSecret(t *testing.T) {
 		"FailReadSecretMetadataInvalidProperty": {
 			reason: "Should return error of non existent key inmetadata",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					MetadataPolicy: "Fetch",
 					Property:       "does_not_exist",
 				},
@@ -300,8 +300,8 @@ func TestGetSecret(t *testing.T) {
 		"FailReadSecretMetadataNoMetadata": {
 			reason: "Should return the access_key value from the metadata",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					MetadataPolicy: "Fetch",
 				},
 				vLogical: &fake.Logical{
@@ -309,14 +309,14 @@ func TestGetSecret(t *testing.T) {
 				},
 			},
 			want: want{
-				err: fmt.Errorf(errNotFound),
+				err: errors.New(errNotFound),
 			},
 		},
 		"FailReadSecretMetadataWrongVersion": {
 			reason: "Should return the access_key value from the metadata",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					MetadataPolicy: "Fetch",
 				},
 				vLogical: &fake.Logical{
@@ -324,7 +324,7 @@ func TestGetSecret(t *testing.T) {
 				},
 			},
 			want: want{
-				err: fmt.Errorf(errUnsupportedMetadataKvVersion),
+				err: errors.New(errUnsupportedMetadataKvVersion),
 			},
 		},
 	}
@@ -383,11 +383,11 @@ func TestGetSecretMap(t *testing.T) {
 	}
 
 	type args struct {
-		store   *esv1beta1.VaultProvider
+		store   *esv1.VaultProvider
 		kube    kclient.Client
 		vClient util.Logical
 		ns      string
-		data    esv1beta1.ExternalSecretDataRemoteRef
+		data    esv1.ExternalSecretDataRemoteRef
 	}
 
 	type want struct {
@@ -403,7 +403,7 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadSecretKV1": {
 			reason: "Should read a v1 secret",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(secret, nil),
 				},
@@ -419,7 +419,7 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadSecretKV2": {
 			reason: "Should read a v2 secret",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(map[string]any{
 						"data": secret,
@@ -437,7 +437,7 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadSecretWithSpecialCharactersKV1": {
 			reason: "Should read a v1 secret with special characters",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(secretWithSpecialCharacter, nil),
 				},
@@ -453,7 +453,7 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadSecretWithSpecialCharactersKV2": {
 			reason: "Should read a v2 secret with special characters",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(map[string]any{
 						"data": secretWithSpecialCharacter,
@@ -471,7 +471,7 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadSecretWithNilValueKV1": {
 			reason: "Should read v1 secret with a nil value",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(secretWithNilVal, nil),
 				},
@@ -488,7 +488,7 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadSecretWithNilValueKV2": {
 			reason: "Should read v2 secret with a nil value",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(map[string]any{
 						"data": secretWithNilVal}, nil),
@@ -506,7 +506,7 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadSecretWithTypesKV2": {
 			reason: "Should read v2 secret with different types",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(map[string]any{
 						"data": secretWithTypes}, nil),
@@ -527,8 +527,8 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadNestedSecret": {
 			reason: "Should read the secret with nested property",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "nested",
 				},
 				vClient: &fake.Logical{
@@ -546,8 +546,8 @@ func TestGetSecretMap(t *testing.T) {
 		"ReadDeeplyNestedSecret": {
 			reason: "Should read the secret for deeply nested property",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
-				data: esv1beta1.ExternalSecretDataRemoteRef{
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
+				data: esv1.ExternalSecretDataRemoteRef{
 					Property: "nested.foo",
 				},
 				vClient: &fake.Logical{
@@ -603,13 +603,13 @@ func TestGetSecretPath(t *testing.T) {
 	storeV2.Spec.Provider.Vault.Path = &multiPath
 	storeV2NoPath.Spec.Provider.Vault.Path = nil
 
-	storeV1 := makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1)
+	storeV1 := makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1)
 	storeV1NoPath := storeV1.DeepCopy()
 	storeV1.Spec.Provider.Vault.Path = &multiPath
 	storeV1NoPath.Spec.Provider.Vault.Path = nil
 
 	type args struct {
-		store    *esv1beta1.VaultProvider
+		store    *esv1.VaultProvider
 		path     string
 		expected string
 	}
@@ -696,6 +696,67 @@ func TestGetSecretPath(t *testing.T) {
 	}
 }
 
+func TestGetSecretMetadataPath(t *testing.T) {
+	storeV2 := makeValidSecretStore()
+	storeV2NoPath := storeV2.DeepCopy()
+	multiPath := "secret/path"
+	storeV2.Spec.Provider.Vault.Path = &multiPath
+	storeV2NoPath.Spec.Provider.Vault.Path = nil
+
+	storeV1 := makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1)
+	storeV1NoPath := storeV1.DeepCopy()
+	storeV1.Spec.Provider.Vault.Path = &multiPath
+	storeV1NoPath.Spec.Provider.Vault.Path = nil
+
+	type args struct {
+		store    *esv1.VaultProvider
+		path     string
+		expected string
+	}
+	cases := map[string]struct {
+		reason string
+		args   args
+	}{
+		"PathForV1": {
+			reason: "path should compose with mount point if set",
+			args: args{
+				store:    storeV1.Spec.Provider.Vault,
+				path:     "data/test",
+				expected: "secret/path/data/test",
+			},
+		},
+		"PathForV2": {
+			reason: "path should compose with mount point if set without data",
+			args: args{
+				store:    storeV2.Spec.Provider.Vault,
+				path:     "secret/path/data/test",
+				expected: "secret/path/metadata/secret/path/data/test",
+			},
+		},
+		"PathForV2WithData": {
+			reason: "if data is in the path it shouldn't be changed",
+			args: args{
+				store:    storeV2NoPath.Spec.Provider.Vault,
+				path:     "my_data/data/path",
+				expected: "my_data/metadata/path",
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			vStore := &client{
+				store: tc.args.store,
+			}
+
+			want, _ := vStore.buildMetadataPath(tc.args.path)
+			if diff := cmp.Diff(want, tc.args.expected); diff != "" {
+				t.Errorf("\n%s\nvault.buildPath(...): -want expected, +got error:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
 func TestSecretExists(t *testing.T) {
 	secret := map[string]any{
 		"foo": "bar",
@@ -705,7 +766,7 @@ func TestSecretExists(t *testing.T) {
 	}
 	errNope := errors.New("nope")
 	type args struct {
-		store   *esv1beta1.VaultProvider
+		store   *esv1.VaultProvider
 		vClient util.Logical
 	}
 	type want struct {
@@ -721,9 +782,9 @@ func TestSecretExists(t *testing.T) {
 		"NoExistingSecretV1": {
 			reason: "Should return false, nil if secret does not exist in provider.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
-					ReadWithDataWithContextFn: fake.NewReadWithContextFn(nil, esv1beta1.NoSecretError{}),
+					ReadWithDataWithContextFn: fake.NewReadWithContextFn(nil, esv1.NoSecretError{}),
 				},
 			},
 			ref: &testingfake.PushSecretData{RemoteKey: "secret"},
@@ -735,9 +796,9 @@ func TestSecretExists(t *testing.T) {
 		"NoExistingSecretV2": {
 			reason: "Should return false, nil if secret does not exist in provider.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
-					ReadWithDataWithContextFn: fake.NewReadWithContextFn(nil, esv1beta1.NoSecretError{}),
+					ReadWithDataWithContextFn: fake.NewReadWithContextFn(nil, esv1.NoSecretError{}),
 				},
 			},
 			ref: &testingfake.PushSecretData{RemoteKey: "secret"},
@@ -749,7 +810,7 @@ func TestSecretExists(t *testing.T) {
 		"NoExistingSecretWithPropertyV2": {
 			reason: "Should return false, nil if secret with property does not exist in provider.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(map[string]any{
 						"data": secret,
@@ -765,7 +826,7 @@ func TestSecretExists(t *testing.T) {
 		"NoExistingSecretWithPropertyV1": {
 			reason: "Should return false, nil if secret with property does not exist in provider.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(secret, nil),
 				},
@@ -779,7 +840,7 @@ func TestSecretExists(t *testing.T) {
 		"ExistingSecretV1": {
 			reason: "Should return true, nil if secret exists in provider.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(secret, nil),
 				},
@@ -793,7 +854,7 @@ func TestSecretExists(t *testing.T) {
 		"ExistingSecretV2": {
 			reason: "Should return true, nil if secret exists in provider.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(map[string]any{
 						"data": secret,
@@ -809,7 +870,7 @@ func TestSecretExists(t *testing.T) {
 		"ExistingSecretWithNilV1": {
 			reason: "Should return false, nil if secret in provider has nil value.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(secretWithNil, nil),
 				},
@@ -823,7 +884,7 @@ func TestSecretExists(t *testing.T) {
 		"ExistingSecretWithNilV2": {
 			reason: "Should return false, nil if secret in provider has nil value.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(map[string]any{
 						"data": secretWithNil,
@@ -839,7 +900,7 @@ func TestSecretExists(t *testing.T) {
 		"ErrorReadingSecretV1": {
 			reason: "Should return error if secret existence cannot be verified.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV1).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV1).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(nil, errNope),
 				},
@@ -853,7 +914,7 @@ func TestSecretExists(t *testing.T) {
 		"ErrorReadingSecretV2": {
 			reason: "Should return error if secret existence cannot be verified.",
 			args: args{
-				store: makeValidSecretStoreWithVersion(esv1beta1.VaultKVStoreV2).Spec.Provider.Vault,
+				store: makeValidSecretStoreWithVersion(esv1.VaultKVStoreV2).Spec.Provider.Vault,
 				vClient: &fake.Logical{
 					ReadWithDataWithContextFn: fake.NewReadWithContextFn(nil, errNope),
 				},

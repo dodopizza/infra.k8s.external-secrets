@@ -22,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -44,7 +44,7 @@ var _ = Describe("SecretStore reconcile", func() {
 		Expect(k8sClient.Delete(context.Background(), test.store)).ToNot(HaveOccurred())
 	})
 
-	// a invalid provider config should be reflected
+	// an invalid provider config should be reflected
 	// in the store status condition
 	invalidProvider := func(tc *testCase) {
 		tc.assert = func() {

@@ -32,10 +32,20 @@ type GCPSMAuthSecretRef struct {
 }
 
 type GCPWorkloadIdentity struct {
+	// +kubebuilder:validation:Required
 	ServiceAccountRef esmeta.ServiceAccountSelector `json:"serviceAccountRef"`
-	ClusterLocation   string                        `json:"clusterLocation"`
-	ClusterName       string                        `json:"clusterName"`
-	ClusterProjectID  string                        `json:"clusterProjectID,omitempty"`
+	// ClusterLocation is the location of the cluster
+	// If not specified, it fetches information from the metadata server
+	// +optional
+	ClusterLocation string `json:"clusterLocation,omitempty"`
+	// ClusterName is the name of the cluster
+	// If not specified, it fetches information from the metadata server
+	// +optional
+	ClusterName string `json:"clusterName,omitempty"`
+	// ClusterProjectID is the project ID of the cluster
+	// If not specified, it fetches information from the metadata server
+	// +optional
+	ClusterProjectID string `json:"clusterProjectID,omitempty"`
 }
 
 // GCPSMProvider Configures a store to sync secrets using the GCP Secret Manager provider.
@@ -46,4 +56,7 @@ type GCPSMProvider struct {
 
 	// ProjectID project where secret is located
 	ProjectID string `json:"projectID,omitempty"`
+
+	// Location optionally defines a location for a secret
+	Location string `json:"location,omitempty"`
 }

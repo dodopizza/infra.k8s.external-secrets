@@ -11,11 +11,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package chef
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -30,7 +32,7 @@ import (
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	"github.com/external-secrets/external-secrets/pkg/metrics"
 	"github.com/external-secrets/external-secrets/pkg/utils"
 )
@@ -85,16 +87,16 @@ type Providerchef struct {
 	log            logr.Logger
 }
 
-var _ v1beta1.SecretsClient = &Providerchef{}
-var _ v1beta1.Provider = &Providerchef{}
+var _ esv1.SecretsClient = &Providerchef{}
+var _ esv1.Provider = &Providerchef{}
 
 func init() {
-	v1beta1.Register(&Providerchef{}, &v1beta1.SecretStoreProvider{
-		Chef: &v1beta1.ChefProvider{},
-	})
+	esv1.Register(&Providerchef{}, &esv1.SecretStoreProvider{
+		Chef: &esv1.ChefProvider{},
+	}, esv1.MaintenanceStatusMaintained)
 }
 
-func (providerchef *Providerchef) NewClient(ctx context.Context, store v1beta1.GenericStore, kube kclient.Client, namespace string) (v1beta1.SecretsClient, error) {
+func (providerchef *Providerchef) NewClient(ctx context.Context, store esv1.GenericStore, kube kclient.Client, namespace string) (esv1.SecretsClient, error) {
 	chefProvider, err := getChefProvider(store)
 	if err != nil {
 		return nil, fmt.Errorf(errChefProvider, err)
@@ -106,9 +108,9 @@ func (providerchef *Providerchef) NewClient(ctx context.Context, store v1beta1.G
 		Namespace: namespace,
 	}
 
-	if store.GetObjectKind().GroupVersionKind().Kind == v1beta1.ClusterSecretStoreKind {
+	if store.GetObjectKind().GroupVersionKind().Kind == esv1.ClusterSecretStoreKind {
 		if chefProvider.Auth.SecretRef.SecretKey.Namespace == nil {
-			return nil, fmt.Errorf(errInvalidClusterStoreMissingPKNamespace)
+			return nil, errors.New(errInvalidClusterStoreMissingPKNamespace)
 		}
 		objectKey.Namespace = *chefProvider.Auth.SecretRef.SecretKey.Namespace
 	}
@@ -119,7 +121,7 @@ func (providerchef *Providerchef) NewClient(ctx context.Context, store v1beta1.G
 
 	secretKey := credentialsSecret.Data[chefProvider.Auth.SecretRef.SecretKey.Key]
 	if len(secretKey) == 0 {
-		return nil, fmt.Errorf(errMissingSecretKey)
+		return nil, errors.New(errMissingSecretKey)
 	}
 
 	client, err := chef.NewClient(&chef.Config{
@@ -145,24 +147,24 @@ func (providerchef *Providerchef) Close(_ context.Context) error {
 
 // Validate checks if the client is configured correctly
 // to be able to retrieve secrets from the provider.
-func (providerchef *Providerchef) Validate() (v1beta1.ValidationResult, error) {
+func (providerchef *Providerchef) Validate() (esv1.ValidationResult, error) {
 	_, err := providerchef.userService.Get(providerchef.clientName)
 	metrics.ObserveAPICall(ProviderChef, CallChefGetUser, err)
 	if err != nil {
-		return v1beta1.ValidationResultError, fmt.Errorf(errStoreValidateFailed)
+		return esv1.ValidationResultError, errors.New(errStoreValidateFailed)
 	}
-	return v1beta1.ValidationResultReady, nil
+	return esv1.ValidationResultReady, nil
 }
 
 // GetAllSecrets Retrieves a map[string][]byte with the Databag names as key and the Databag's Items as secrets.
-func (providerchef *Providerchef) GetAllSecrets(_ context.Context, _ v1beta1.ExternalSecretFind) (map[string][]byte, error) {
-	return nil, fmt.Errorf("dataFrom.find not suppported")
+func (providerchef *Providerchef) GetAllSecrets(_ context.Context, _ esv1.ExternalSecretFind) (map[string][]byte, error) {
+	return nil, errors.New("dataFrom.find not suppported")
 }
 
 // GetSecret returns a databagItem present in the databag. format example: databagName/databagItemName.
-func (providerchef *Providerchef) GetSecret(ctx context.Context, ref v1beta1.ExternalSecretDataRemoteRef) ([]byte, error) {
+func (providerchef *Providerchef) GetSecret(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) ([]byte, error) {
 	if utils.IsNil(providerchef.databagService) {
-		return nil, fmt.Errorf(errUninitalizedChefProvider)
+		return nil, errors.New(errUninitalizedChefProvider)
 	}
 
 	key := ref.Key
@@ -178,7 +180,7 @@ func (providerchef *Providerchef) GetSecret(ctx context.Context, ref v1beta1.Ext
 		return getSingleDatabagItemWithContext(ctx, providerchef, databagName, databagItem, ref.Property)
 	}
 
-	return nil, fmt.Errorf(errInvalidFormat)
+	return nil, errors.New(errInvalidFormat)
 }
 
 func getSingleDatabagItemWithContext(ctx context.Context, providerchef *Providerchef, dataBagName, databagItemName, propertyName string) ([]byte, error) {
@@ -200,7 +202,7 @@ func getSingleDatabagItemWithContext(ctx context.Context, providerchef *Provider
 			}
 			jsonByte, err := json.Marshal(ditem)
 			if err != nil {
-				resultChan <- result{err: fmt.Errorf(errUnableToConvertToJSON)}
+				resultChan <- result{err: errors.New(errUnableToConvertToJSON)}
 				return
 			}
 			if propertyName != "" {
@@ -248,14 +250,14 @@ func getPropertyFromDatabagItem(jsonByte []byte, propertyName string) ([]byte, e
 // GetSecretMap returns multiple k/v pairs from the provider, for dataFrom.extract.key
 // dataFrom.extract.key only accepts dataBagName, example : dataFrom.extract.key: myDatabag
 // databagItemName or Property not expected in key.
-func (providerchef *Providerchef) GetSecretMap(ctx context.Context, ref v1beta1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
+func (providerchef *Providerchef) GetSecretMap(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
 	if utils.IsNil(providerchef.databagService) {
-		return nil, fmt.Errorf(errUninitalizedChefProvider)
+		return nil, errors.New(errUninitalizedChefProvider)
 	}
 	databagName := ref.Key
 
 	if strings.Contains(databagName, "/") {
-		return nil, fmt.Errorf(errInvalidDataform)
+		return nil, errors.New(errInvalidDataform)
 	}
 	getAllSecrets := make(map[string][]byte)
 	providerchef.log.Info("fetching all items from", "databag:", databagName)
@@ -276,7 +278,7 @@ func (providerchef *Providerchef) GetSecretMap(ctx context.Context, ref v1beta1.
 }
 
 // ValidateStore checks if the provided store is valid.
-func (providerchef *Providerchef) ValidateStore(store v1beta1.GenericStore) (admission.Warnings, error) {
+func (providerchef *Providerchef) ValidateStore(store esv1.GenericStore) (admission.Warnings, error) {
 	chefProvider, err := getChefProvider(store)
 	if err != nil {
 		return nil, fmt.Errorf(errChefStore, err)
@@ -289,60 +291,60 @@ func (providerchef *Providerchef) ValidateStore(store v1beta1.GenericStore) (adm
 }
 
 // getChefProvider validates the incoming store and return the chef provider.
-func getChefProvider(store v1beta1.GenericStore) (*v1beta1.ChefProvider, error) {
+func getChefProvider(store esv1.GenericStore) (*esv1.ChefProvider, error) {
 	if store == nil {
-		return nil, fmt.Errorf(errMissingStore)
+		return nil, errors.New(errMissingStore)
 	}
 	storeSpec := store.GetSpec()
 	if storeSpec == nil {
-		return nil, fmt.Errorf(errMissingStoreSpec)
+		return nil, errors.New(errMissingStoreSpec)
 	}
 	provider := storeSpec.Provider
 	if provider == nil {
-		return nil, fmt.Errorf(errMissingProvider)
+		return nil, errors.New(errMissingProvider)
 	}
 	chefProvider := storeSpec.Provider.Chef
 	if chefProvider == nil {
-		return nil, fmt.Errorf(errMissingChefProvider)
+		return nil, errors.New(errMissingChefProvider)
 	}
 	if chefProvider.UserName == "" {
-		return chefProvider, fmt.Errorf(errMissingUserName)
+		return chefProvider, errors.New(errMissingUserName)
 	}
 	if chefProvider.ServerURL == "" {
-		return chefProvider, fmt.Errorf(errMissingServerURL)
+		return chefProvider, errors.New(errMissingServerURL)
 	}
 	if !strings.HasSuffix(chefProvider.ServerURL, "/") {
-		return chefProvider, fmt.Errorf(errServerURLNoEndSlash)
+		return chefProvider, errors.New(errServerURLNoEndSlash)
 	}
 	// check valid URL
 	if _, err := url.ParseRequestURI(chefProvider.ServerURL); err != nil {
 		return chefProvider, fmt.Errorf(errInvalidURL, err)
 	}
 	if chefProvider.Auth == nil {
-		return chefProvider, fmt.Errorf(errMissingAuth)
+		return chefProvider, errors.New(errMissingAuth)
 	}
 	if chefProvider.Auth.SecretRef.SecretKey.Key == "" {
-		return chefProvider, fmt.Errorf(errMissingSecretKey)
+		return chefProvider, errors.New(errMissingSecretKey)
 	}
 
 	return chefProvider, nil
 }
 
 // Not Implemented DeleteSecret.
-func (providerchef *Providerchef) DeleteSecret(_ context.Context, _ v1beta1.PushSecretRemoteRef) error {
-	return fmt.Errorf(errNotImplemented)
+func (providerchef *Providerchef) DeleteSecret(_ context.Context, _ esv1.PushSecretRemoteRef) error {
+	return errors.New(errNotImplemented)
 }
 
 // Not Implemented PushSecret.
-func (providerchef *Providerchef) PushSecret(_ context.Context, _ *corev1.Secret, _ v1beta1.PushSecretData) error {
-	return fmt.Errorf(errNotImplemented)
+func (providerchef *Providerchef) PushSecret(_ context.Context, _ *corev1.Secret, _ esv1.PushSecretData) error {
+	return errors.New(errNotImplemented)
 }
 
-func (providerchef *Providerchef) SecretExists(_ context.Context, _ v1beta1.PushSecretRemoteRef) (bool, error) {
-	return false, fmt.Errorf(errNotImplemented)
+func (providerchef *Providerchef) SecretExists(_ context.Context, _ esv1.PushSecretRemoteRef) (bool, error) {
+	return false, errors.New(errNotImplemented)
 }
 
 // Capabilities return the provider supported capabilities (ReadOnly, WriteOnly, ReadWrite).
-func (providerchef *Providerchef) Capabilities() v1beta1.SecretStoreCapabilities {
-	return v1beta1.SecretStoreReadOnly
+func (providerchef *Providerchef) Capabilities() esv1.SecretStoreCapabilities {
+	return esv1.SecretStoreReadOnly
 }

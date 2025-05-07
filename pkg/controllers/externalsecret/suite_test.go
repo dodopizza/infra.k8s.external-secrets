@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"go.uber.org/zap/zapcore"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,8 +32,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	genv1alpha1 "github.com/external-secrets/external-secrets/apis/generators/v1alpha1"
+	ctrlcommon "github.com/external-secrets/external-secrets/pkg/controllers/common"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -69,7 +71,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 	Expect(cfg).ToNot(BeNil())
 
-	err = esv1beta1.AddToScheme(scheme.Scheme)
+	err = esv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = genv1alpha1.AddToScheme(scheme.Scheme)
@@ -80,6 +82,17 @@ var _ = BeforeSuite(func() {
 		Metrics: server.Options{
 			BindAddress: "0", // avoid port collision when testing
 		},
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				// the client creates a ListWatch for resources that are requested with .Get() or .List()
+				// we disable caching in the production code, so we disable it here as well for consistency
+				// see: https://github.com/external-secrets/external-secrets/issues/721
+				DisableFor: []client.Object{
+					&v1.Secret{},
+					&v1.ConfigMap{},
+				},
+			},
+		},
 	})
 	Expect(err).ToNot(HaveOccurred())
 
@@ -89,8 +102,14 @@ var _ = BeforeSuite(func() {
 	Expect(k8sClient).ToNot(BeNil())
 	Expect(err).ToNot(HaveOccurred())
 
+	// by default, we use a separate cached client for secrets that are managed by the controller
+	// so we should test under the same conditions
+	secretClient, err := ctrlcommon.BuildManagedSecretClient(k8sManager, "")
+	Expect(err).ToNot(HaveOccurred())
+
 	err = (&Reconciler{
-		Client:                    k8sClient,
+		Client:                    k8sManager.GetClient(),
+		SecretClient:              secretClient,
 		RestConfig:                cfg,
 		Scheme:                    k8sManager.GetScheme(),
 		Log:                       ctrl.Log.WithName("controllers").WithName("ExternalSecrets"),
@@ -98,6 +117,7 @@ var _ = BeforeSuite(func() {
 		ClusterSecretStoreEnabled: true,
 	}).SetupWithManager(k8sManager, controller.Options{
 		MaxConcurrentReconciles: 1,
+		RateLimiter:             ctrlcommon.BuildRateLimiter(),
 	})
 	Expect(err).ToNot(HaveOccurred())
 

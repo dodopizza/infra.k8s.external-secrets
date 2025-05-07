@@ -28,7 +28,7 @@ import (
 
 	"github.com/external-secrets/external-secrets-e2e/framework"
 	"github.com/external-secrets/external-secrets-e2e/suites/provider/cases/common"
-	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 )
 
 const (
@@ -59,7 +59,6 @@ var _ = Describe("[vault]", Label("vault"), func() {
 		framework.Compose(withTokenAuth, f, common.JSONDataWithTemplate, useTokenAuth),
 		framework.Compose(withTokenAuth, f, common.DataPropertyDockerconfigJSON, useTokenAuth),
 		framework.Compose(withTokenAuth, f, common.JSONDataWithoutTargetName, useTokenAuth),
-		framework.Compose(withTokenAuth, f, common.SyncV1Alpha1, useTokenAuth),
 		framework.Compose(withTokenAuth, f, common.DecodingPolicySync, useTokenAuth),
 		framework.Compose(withTokenAuth, f, common.JSONDataWithTemplateFromLiteral, useTokenAuth),
 		framework.Compose(withTokenAuth, f, common.TemplateFromConfigmaps, useTokenAuth),
@@ -82,6 +81,8 @@ var _ = Describe("[vault]", Label("vault"), func() {
 		framework.Compose(withApprole, f, common.DataPropertyDockerconfigJSON, useApproleAuth),
 		framework.Compose(withApprole, f, common.JSONDataWithoutTargetName, useApproleAuth),
 		// use v1 provider
+		framework.Compose(withV1, f, common.FindByName, useV1Provider),
+		framework.Compose(withV1, f, common.FindByNameAndRewrite, useV1Provider),
 		framework.Compose(withV1, f, common.JSONDataFromSync, useV1Provider),
 		framework.Compose(withV1, f, common.JSONDataFromRewrite, useV1Provider),
 		framework.Compose(withV1, f, common.JSONDataWithProperty, useV1Provider),
@@ -292,7 +293,7 @@ func testInvalidMtlsStore(tc *framework.TestCase) {
 		Expect(string(ss.Status.Conditions[0].Type)).Should(Equal("Ready"))
 		Expect(string(ss.Status.Conditions[0].Status)).Should(Equal("False"))
 		Expect(ss.Status.Conditions[0].Reason).Should(Equal("ValidationFailed"))
-		Expect(ss.Status.Conditions[0].Message).Should(Equal("unable to validate store"))
+		Expect(ss.Status.Conditions[0].Message).Should(ContainSubstring("unable to validate store"))
 		return true, nil
 	})
 	Expect(err).ToNot(HaveOccurred())

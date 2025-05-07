@@ -15,7 +15,7 @@ limitations under the License.
 package akeyless
 
 import (
-	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 )
 
 const (
@@ -46,16 +46,16 @@ const (
 )
 
 // GetAKeylessProvider does the necessary nil checks and returns the akeyless provider or an error.
-func GetAKeylessProvider(store esv1beta1.GenericStore) (*esv1beta1.AkeylessProvider, error) {
+func GetAKeylessProvider(store esv1.GenericStore) (*esv1.AkeylessProvider, error) {
 	if store == nil {
-		return nil, fmt.Errorf(errNilStore)
+		return nil, errors.New(errNilStore)
 	}
 	spc := store.GetSpec()
 	if spc == nil {
-		return nil, fmt.Errorf(errMissingStoreSpec)
+		return nil, errors.New(errMissingStoreSpec)
 	}
 	if spc.Provider == nil {
-		return nil, fmt.Errorf(errMissingProvider)
+		return nil, errors.New(errMissingStoreSpec)
 	}
 	prov := spc.Provider.Akeyless
 	if prov == nil {
@@ -104,17 +104,10 @@ func sendReq(url string) string {
 	if err != nil {
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	body, _ := io.ReadAll(resp.Body)
 	return string(body)
-}
-
-func base64decode(in []byte) ([]byte, error) {
-	out := make([]byte, len(in))
-	l, err := base64.StdEncoding.Decode(out, in)
-	if err != nil {
-		return nil, err
-	}
-	return out[:l], nil
 }

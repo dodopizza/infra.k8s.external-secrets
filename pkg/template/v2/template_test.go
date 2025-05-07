@@ -25,7 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esapi "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 )
 
 const (
@@ -150,6 +150,8 @@ func TestExecute(t *testing.T) {
 		expectedStringData  map[string]string
 		expectedLabels      map[string]string
 		expectedAnnotations map[string]string
+		leftDelimiter       string
+		rightDelimiter      string
 		expErr              string
 		expLblErr           string
 		expAnnoErr          string
@@ -370,6 +372,14 @@ func TestExecute(t *testing.T) {
 			expErr: "unable to parse template",
 		},
 		{
+			name: "unknown key error",
+			tpl: map[string][]byte{
+				"key": []byte(`{{ .unknown }}`),
+			},
+			data:   map[string][]byte{},
+			expErr: "unable to execute template at key key",
+		},
+		{
 			name: "jwk rsa pub pem",
 			tpl: map[string][]byte{
 				"fn": []byte(`{{ .secret | jwkPublicKeyPem }}`),
@@ -480,6 +490,21 @@ func TestExecute(t *testing.T) {
 				"foo": "1234",
 			},
 		},
+		{
+			name: "NonStandardDelimiters",
+			stringDataTpl: map[string][]byte{
+				"foo": []byte("<< .secret | b64dec >>"),
+			},
+			leftDelimiter:  "<<",
+			rightDelimiter: ">>",
+			data: map[string][]byte{
+				"secret": []byte("MTIzNA=="),
+				"env":    []byte("ZGV2"),
+			},
+			expectedStringData: map[string]string{
+				"foo": "1234",
+			},
+		},
 	}
 
 	for i := range tbl {
@@ -489,6 +514,12 @@ func TestExecute(t *testing.T) {
 				Data:       make(map[string][]byte),
 				StringData: make(map[string]string),
 				ObjectMeta: v1.ObjectMeta{Labels: make(map[string]string), Annotations: make(map[string]string)},
+			}
+			if row.leftDelimiter != "" {
+				leftDelim = row.leftDelimiter
+			}
+			if row.rightDelimiter != "" {
+				rightDelim = row.rightDelimiter
 			}
 			err := Execute(row.tpl, row.data, esapi.TemplateScopeValues, esapi.TemplateTargetData, sec)
 			if !ErrorContains(err, row.expErr) {
@@ -510,6 +541,85 @@ func TestExecute(t *testing.T) {
 			}
 			if row.expectedAnnotations != nil {
 				assert.EqualValues(t, row.expectedAnnotations, sec.ObjectMeta.Annotations)
+			}
+		})
+	}
+}
+
+func TestScopeValuesWithSecretFieldsNil(t *testing.T) {
+	tbl := []struct {
+		name               string
+		tpl                map[string][]byte
+		target             esapi.TemplateTarget
+		data               map[string][]byte
+		expectedData       map[string][]byte
+		expectedStringData map[string]string
+		expErr             string
+	}{
+		{
+			name:   "test empty",
+			tpl:    map[string][]byte{},
+			target: esapi.TemplateTargetData,
+			data:   nil,
+		},
+		{
+			name:   "test byte",
+			tpl:    map[string][]byte{"foo": []byte("bar")},
+			target: esapi.TemplateTargetData,
+			data: map[string][]byte{
+				"key":   []byte("foo"),
+				"value": []byte("bar"),
+			},
+			expectedData: map[string][]byte{
+				"foo": []byte("bar"),
+			},
+		},
+		{
+			name:   "test Annotations",
+			tpl:    map[string][]byte{"foo": []byte("bar")},
+			target: esapi.TemplateTargetAnnotations,
+			data: map[string][]byte{
+				"key":   []byte("foo"),
+				"value": []byte("bar"),
+			},
+			expectedStringData: map[string]string{
+				"foo": "bar",
+			},
+		},
+		{
+			name:   "test Labels",
+			tpl:    map[string][]byte{"foo": []byte("bar")},
+			target: esapi.TemplateTargetLabels,
+			data: map[string][]byte{
+				"key":   []byte("foo"),
+				"value": []byte("bar"),
+			},
+			expectedStringData: map[string]string{
+				"foo": "bar",
+			},
+		},
+	}
+	for i := range tbl {
+		row := tbl[i]
+		t.Run(row.name, func(t *testing.T) {
+			sec := &corev1.Secret{}
+			err := Execute(row.tpl, row.data, esapi.TemplateScopeValues, row.target, sec)
+			if !ErrorContains(err, row.expErr) {
+				t.Errorf("unexpected error: %s, expected: %s", err, row.expErr)
+			}
+			switch row.target {
+			case esapi.TemplateTargetData:
+				if row.expectedData != nil {
+					assert.EqualValues(t, row.expectedData, sec.Data)
+				}
+			case esapi.TemplateTargetLabels:
+				if row.expectedStringData != nil {
+					assert.EqualValues(t, row.expectedStringData, sec.Labels)
+				}
+			case esapi.TemplateTargetAnnotations:
+				if row.expectedStringData != nil {
+					assert.EqualValues(t, row.expectedStringData, sec.Annotations)
+				}
 			}
 		})
 	}

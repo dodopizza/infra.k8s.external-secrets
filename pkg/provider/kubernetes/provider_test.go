@@ -27,7 +27,7 @@ import (
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 	fclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	v1 "github.com/external-secrets/external-secrets/apis/meta/v1"
 )
 
@@ -51,6 +51,24 @@ mv+AggtK0aRFb9o47z/BypLdk5mhbf3Mmr88C8XBzEnfdYyf4JpTlZrYLBmDCu5d
 9RLLsjXxhag8xqMtd1uLUM8XOTGzVWacw8iGY+CTtBKqyA+AE6/bDwZvEwVtsKtC
 QJ85ioEpy00NioqcF0WyMZH80uMsPycfpnl5uF7RkW8u
 -----END CERTIFICATE-----`
+	testKubeConfig = `apiVersion: v1
+clusters:
+- cluster:
+    server: https://api.my-domain.tld
+  name: mycluster
+contexts:
+- context:
+    cluster: mycluster
+    user: myuser
+  name: mycontext
+current-context: mycontext
+kind: Config
+preferences: {}
+users:
+- name: myuser
+  user:
+    token: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOjE3MTkzOTY4OTksImV4cCI6MTc1MDkzMjg4NywiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsIkdpdmVuTmFtZSI6IkpvaG5ueSIsIlN1cm5hbWUiOiJSb2NrZXQiLCJFbWFpbCI6Impyb2NrZXRAZXhhbXBsZS5jb20iLCJSb2xlIjpbIk1hbmFnZXIiLCJQcm9qZWN0IEFkbWluaXN0cmF0b3IiXX0.xXrfIl0akhfjWU_BDl7Ad54SXje0YlJdnugzwh96VmM
+`
 )
 
 func TestNewClient(t *testing.T) {
@@ -60,7 +78,7 @@ func TestNewClient(t *testing.T) {
 		Namespace    string
 	}
 	type args struct {
-		store     esv1beta1.GenericStore
+		store     esv1.GenericStore
 		kube      kclient.Client
 		clientset kubernetes.Interface
 		namespace string
@@ -76,12 +94,12 @@ func TestNewClient(t *testing.T) {
 			name:   "invalid store",
 			fields: fields{},
 			args: args{
-				store: &esv1beta1.ClusterSecretStore{
+				store: &esv1.ClusterSecretStore{
 					TypeMeta: metav1.TypeMeta{
-						Kind: esv1beta1.ClusterSecretStoreKind,
+						Kind: esv1.ClusterSecretStoreKind,
 					},
-					Spec: esv1beta1.SecretStoreSpec{
-						Provider: &esv1beta1.SecretStoreProvider{},
+					Spec: esv1.SecretStoreSpec{
+						Provider: &esv1.SecretStoreProvider{},
 					},
 				},
 				kube: fclient.NewClientBuilder().Build(),
@@ -89,21 +107,56 @@ func TestNewClient(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:   "test auth ref",
+			fields: fields{},
+			args: args{
+				store: &esv1.ClusterSecretStore{
+					TypeMeta: metav1.TypeMeta{
+						Kind: esv1.ClusterSecretStoreKind,
+					},
+					Spec: esv1.SecretStoreSpec{
+						Provider: &esv1.SecretStoreProvider{
+							Kubernetes: &esv1.KubernetesProvider{
+								AuthRef: &v1.SecretKeySelector{
+									Name:      "foo",
+									Namespace: pointer.To("default"),
+									Key:       "config",
+								},
+							},
+						},
+					},
+				},
+				namespace: "",
+				kube: fclient.NewClientBuilder().WithObjects(&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "foo",
+						Namespace: "default",
+					},
+					Data: map[string][]byte{
+						"config": []byte(testKubeConfig),
+					},
+				}).Build(),
+				clientset: clientgofake.NewSimpleClientset(),
+			},
+			want: true,
+		},
+		{
 			name:   "test referent auth return",
 			fields: fields{},
 			args: args{
-				store: &esv1beta1.ClusterSecretStore{
+				store: &esv1.ClusterSecretStore{
 					TypeMeta: metav1.TypeMeta{
-						Kind: esv1beta1.ClusterSecretStoreKind,
+						Kind: esv1.ClusterSecretStoreKind,
 					},
-					Spec: esv1beta1.SecretStoreSpec{
-						Provider: &esv1beta1.SecretStoreProvider{
-							Kubernetes: &esv1beta1.KubernetesProvider{
-								Server: esv1beta1.KubernetesServer{
+					Spec: esv1.SecretStoreSpec{
+						Provider: &esv1.SecretStoreProvider{
+							Kubernetes: &esv1.KubernetesProvider{
+								Server: esv1.KubernetesServer{
+									URL:      "https://my.test.tld",
 									CABundle: []byte(testCertificate),
 								},
-								Auth: esv1beta1.KubernetesAuth{
-									Token: &esv1beta1.TokenAuth{
+								Auth: esv1.KubernetesAuth{
+									Token: &esv1.TokenAuth{
 										BearerToken: v1.SecretKeySelector{
 											Name: "foo",
 											Key:  "token",
@@ -124,19 +177,20 @@ func TestNewClient(t *testing.T) {
 			name:   "auth fail results in error",
 			fields: fields{},
 			args: args{
-				store: &esv1beta1.ClusterSecretStore{
+				store: &esv1.ClusterSecretStore{
 					TypeMeta: metav1.TypeMeta{
-						Kind: esv1beta1.ClusterSecretStoreKind,
+						Kind: esv1.ClusterSecretStoreKind,
 					},
-					Spec: esv1beta1.SecretStoreSpec{
-						Provider: &esv1beta1.SecretStoreProvider{
-							Kubernetes: &esv1beta1.KubernetesProvider{
-								Server: esv1beta1.KubernetesServer{
+					Spec: esv1.SecretStoreSpec{
+						Provider: &esv1.SecretStoreProvider{
+							Kubernetes: &esv1.KubernetesProvider{
+								Server: esv1.KubernetesServer{
+									URL:      "https://my.test.tld",
 									CABundle: []byte(testCertificate),
 								},
 								RemoteNamespace: "remote",
-								Auth: esv1beta1.KubernetesAuth{
-									Token: &esv1beta1.TokenAuth{
+								Auth: esv1.KubernetesAuth{
+									Token: &esv1.TokenAuth{
 										BearerToken: v1.SecretKeySelector{
 											Name:      "foo",
 											Namespace: pointer.To("default"),
@@ -158,19 +212,20 @@ func TestNewClient(t *testing.T) {
 			name:   "test auth",
 			fields: fields{},
 			args: args{
-				store: &esv1beta1.ClusterSecretStore{
+				store: &esv1.ClusterSecretStore{
 					TypeMeta: metav1.TypeMeta{
-						Kind: esv1beta1.ClusterSecretStoreKind,
+						Kind: esv1.ClusterSecretStoreKind,
 					},
-					Spec: esv1beta1.SecretStoreSpec{
-						Provider: &esv1beta1.SecretStoreProvider{
-							Kubernetes: &esv1beta1.KubernetesProvider{
-								Server: esv1beta1.KubernetesServer{
+					Spec: esv1.SecretStoreSpec{
+						Provider: &esv1.SecretStoreProvider{
+							Kubernetes: &esv1.KubernetesProvider{
+								Server: esv1.KubernetesServer{
+									URL:      "https://my.test.tld",
 									CABundle: []byte(testCertificate),
 								},
 								RemoteNamespace: "remote",
-								Auth: esv1beta1.KubernetesAuth{
-									Token: &esv1beta1.TokenAuth{
+								Auth: esv1.KubernetesAuth{
+									Token: &esv1.TokenAuth{
 										BearerToken: v1.SecretKeySelector{
 											Name:      "foo",
 											Namespace: pointer.To("default"),

@@ -16,15 +16,15 @@ package doppler
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	esv1alpha1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1alpha1"
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
 	v1 "github.com/external-secrets/external-secrets/apis/meta/v1"
 	"github.com/external-secrets/external-secrets/pkg/provider/doppler/client"
 	"github.com/external-secrets/external-secrets/pkg/provider/doppler/fake"
@@ -49,7 +49,7 @@ type dopplerTestCase struct {
 	fakeClient     *fake.DopplerClient
 	request        client.SecretRequest
 	response       *client.SecretResponse
-	remoteRef      *esv1beta1.ExternalSecretDataRemoteRef
+	remoteRef      *esv1.ExternalSecretDataRemoteRef
 	apiErr         error
 	expectError    string
 	expectedSecret string
@@ -62,7 +62,7 @@ type updateSecretCase struct {
 	request     client.UpdateSecretsRequest
 	remoteRef   *esv1alpha1.PushSecretRemoteRef
 	secret      corev1.Secret
-	secretData  esv1beta1.PushSecretData
+	secretData  esv1.PushSecretData
 	apiErr      error
 	expectError string
 }
@@ -100,8 +100,8 @@ func makeValidAPIOutput() *client.SecretResponse {
 	}
 }
 
-func makeValidRemoteRef() *esv1beta1.ExternalSecretDataRemoteRef {
-	return &esv1beta1.ExternalSecretDataRemoteRef{
+func makeValidRemoteRef() *esv1.ExternalSecretDataRemoteRef {
+	return &esv1.ExternalSecretDataRemoteRef{
 		Key: validSecretName,
 	}
 }
@@ -191,7 +191,7 @@ func TestGetSecret(t *testing.T) {
 		pstc.request.Name = missingSecret
 		pstc.response = nil
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	setInvalidSecret := func(pstc *dopplerTestCase) {
@@ -200,14 +200,14 @@ func TestGetSecret(t *testing.T) {
 		pstc.request.Name = invalidSecret
 		pstc.response = nil
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	setClientError := func(pstc *dopplerTestCase) {
 		pstc.label = "invalid client error" //nolint:goconst
 		pstc.response = &client.SecretResponse{}
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	testCases := []*dopplerTestCase{
@@ -254,7 +254,7 @@ func TestGetSecretMap(t *testing.T) {
 		pstc.label = "client error"
 		pstc.response = &client.SecretResponse{}
 		pstc.expectError = missingSecretErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	testCases := []*dopplerTestCase{
@@ -300,14 +300,14 @@ func TestDeleteSecret(t *testing.T) {
 		pstc.request = makeValidDeleteRequest()
 		pstc.remoteRef.RemoteKey = invalidRemoteKey
 		pstc.expectError = missingDeleteErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	setClientError := func(pstc *updateSecretCase) {
 		pstc.label = "invalid client error"
 		pstc.request = makeValidDeleteRequest()
 		pstc.expectError = missingDeleteErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	testCases := []*updateSecretCase{
@@ -337,7 +337,7 @@ func TestPushSecret(t *testing.T) {
 		pstc.label = "push missing secret key"
 		pstc.secretData = makeSecretData(invalidSecret, *makeValidPushRemoteRef())
 		pstc.expectError = missingPushErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	pushMissingRemoteSecret := func(pstc *updateSecretCase) {
@@ -349,13 +349,13 @@ func TestPushSecret(t *testing.T) {
 			},
 		)
 		pstc.expectError = missingPushErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	setClientError := func(pstc *updateSecretCase) {
 		pstc.label = "invalid client error"
 		pstc.expectError = missingPushErr
-		pstc.apiErr = fmt.Errorf("")
+		pstc.apiErr = errors.New("")
 	}
 
 	testCases := []*updateSecretCase{
@@ -376,14 +376,14 @@ func TestPushSecret(t *testing.T) {
 	}
 }
 
-type storeModifier func(*esv1beta1.SecretStore) *esv1beta1.SecretStore
+type storeModifier func(*esv1.SecretStore) *esv1.SecretStore
 
-func makeSecretStore(fn ...storeModifier) *esv1beta1.SecretStore {
-	store := &esv1beta1.SecretStore{
-		Spec: esv1beta1.SecretStoreSpec{
-			Provider: &esv1beta1.SecretStoreProvider{
-				Doppler: &esv1beta1.DopplerProvider{
-					Auth: &esv1beta1.DopplerAuth{},
+func makeSecretStore(fn ...storeModifier) *esv1.SecretStore {
+	store := &esv1.SecretStore{
+		Spec: esv1.SecretStoreSpec{
+			Provider: &esv1.SecretStoreProvider{
+				Doppler: &esv1.DopplerProvider{
+					Auth: &esv1.DopplerAuth{},
 				},
 			},
 		},
@@ -395,7 +395,7 @@ func makeSecretStore(fn ...storeModifier) *esv1beta1.SecretStore {
 }
 
 func withAuth(name, key string, namespace *string) storeModifier {
-	return func(store *esv1beta1.SecretStore) *esv1beta1.SecretStore {
+	return func(store *esv1.SecretStore) *esv1.SecretStore {
 		store.Spec.Provider.Doppler.Auth.SecretRef.DopplerToken = v1.SecretKeySelector{
 			Name:      name,
 			Key:       key,
@@ -407,7 +407,7 @@ func withAuth(name, key string, namespace *string) storeModifier {
 
 type ValidateStoreTestCase struct {
 	label string
-	store *esv1beta1.SecretStore
+	store *esv1.SecretStore
 	err   error
 }
 
@@ -418,12 +418,12 @@ func TestValidateStore(t *testing.T) {
 		{
 			label: "invalid store missing dopplerToken.name",
 			store: makeSecretStore(withAuth("", "", nil)),
-			err:   fmt.Errorf("invalid store: dopplerToken.name cannot be empty"),
+			err:   errors.New("invalid store: dopplerToken.name cannot be empty"),
 		},
 		{
 			label: "invalid store namespace not allowed",
 			store: makeSecretStore(withAuth(secretName, "", &namespace)),
-			err:   fmt.Errorf("invalid store: namespace not allowed with namespaced SecretStore"),
+			err:   errors.New("invalid store: namespace should either be empty or match the namespace of the SecretStore for a namespaced SecretStore"),
 		},
 		{
 			label: "valid provide optional dopplerToken.key",

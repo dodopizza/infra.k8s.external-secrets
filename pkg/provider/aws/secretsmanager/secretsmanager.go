@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -32,16 +33,25 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	utilpointer "k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	"github.com/external-secrets/external-secrets/pkg/constants"
 	"github.com/external-secrets/external-secrets/pkg/find"
 	"github.com/external-secrets/external-secrets/pkg/metrics"
 	"github.com/external-secrets/external-secrets/pkg/provider/aws/util"
 	"github.com/external-secrets/external-secrets/pkg/utils"
+	"github.com/external-secrets/external-secrets/pkg/utils/metadata"
 )
+
+type PushSecretMetadataSpec struct {
+	Tags             map[string]string `json:"tags,omitempty"`
+	Description      string            `json:"description,omitempty"`
+	SecretPushFormat string            `json:"secretPushFormat,omitempty"`
+	KMSKeyID         string            `json:"kmsKeyId,omitempty"`
+}
 
 // Declares metadata information for pushing secrets to AWS Secret Store.
 const (
@@ -51,7 +61,7 @@ const (
 )
 
 // https://github.com/external-secrets/external-secrets/issues/644
-var _ esv1beta1.SecretsClient = &SecretsManager{}
+var _ esv1.SecretsClient = &SecretsManager{}
 
 // SecretsManager is a provider for AWS SecretsManager.
 type SecretsManager struct {
@@ -59,12 +69,14 @@ type SecretsManager struct {
 	client       SMInterface
 	referentAuth bool
 	cache        map[string]*awssm.GetSecretValueOutput
-	config       *esv1beta1.SecretsManager
+	config       *esv1.SecretsManager
+	prefix       string
 }
 
 // SMInterface is a subset of the smiface api.
 // see: https://docs.aws.amazon.com/sdk-for-go/api/service/secretsmanager/secretsmanageriface/
 type SMInterface interface {
+	BatchGetSecretValueWithContext(aws.Context, *awssm.BatchGetSecretValueInput, ...request.Option) (*awssm.BatchGetSecretValueOutput, error)
 	ListSecrets(*awssm.ListSecretsInput) (*awssm.ListSecretsOutput, error)
 	GetSecretValue(*awssm.GetSecretValueInput) (*awssm.GetSecretValueOutput, error)
 	CreateSecretWithContext(aws.Context, *awssm.CreateSecretInput, ...request.Option) (*awssm.CreateSecretOutput, error)
@@ -84,90 +96,48 @@ const (
 var log = ctrl.Log.WithName("provider").WithName("aws").WithName("secretsmanager")
 
 // New creates a new SecretsManager client.
-func New(sess *session.Session, cfg *aws.Config, secretsManagerCfg *esv1beta1.SecretsManager, referentAuth bool) (*SecretsManager, error) {
+func New(sess *session.Session, cfg *aws.Config, secretsManagerCfg *esv1.SecretsManager, prefix string, referentAuth bool) (*SecretsManager, error) {
 	return &SecretsManager{
 		sess:         sess,
 		client:       awssm.New(sess, cfg),
 		referentAuth: referentAuth,
 		cache:        make(map[string]*awssm.GetSecretValueOutput),
 		config:       secretsManagerCfg,
+		prefix:       prefix,
 	}, nil
 }
 
-func (sm *SecretsManager) fetch(ctx context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) (*awssm.GetSecretValueOutput, error) {
+func (sm *SecretsManager) fetch(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) (*awssm.GetSecretValueOutput, error) {
 	ver := "AWSCURRENT"
 	valueFrom := "SECRET"
 	if ref.Version != "" {
 		ver = ref.Version
 	}
-	if ref.MetadataPolicy == esv1beta1.ExternalSecretMetadataPolicyFetch {
+	if ref.MetadataPolicy == esv1.ExternalSecretMetadataPolicyFetch {
 		valueFrom = "TAG"
 	}
 
-	log.Info("fetching secret value", "key", ref.Key, "version", ver, "value", valueFrom)
+	key := sm.prefix + ref.Key
+	log.Info("fetching secret value", "key", key, "version", ver, "value", valueFrom)
 
-	cacheKey := fmt.Sprintf("%s#%s#%s", ref.Key, ver, valueFrom)
+	cacheKey := fmt.Sprintf("%s#%s#%s", key, ver, valueFrom)
 	if secretOut, found := sm.cache[cacheKey]; found {
-		log.Info("found secret in cache", "key", ref.Key, "version", ver)
+		log.Info("found secret in cache", "key", key, "version", ver)
 		return secretOut, nil
 	}
 
-	var secretOut *awssm.GetSecretValueOutput
-	var err error
-
-	if ref.MetadataPolicy == esv1beta1.ExternalSecretMetadataPolicyFetch {
-		describeSecretInput := &awssm.DescribeSecretInput{
-			SecretId: &ref.Key,
-		}
-
-		descOutput, err := sm.client.DescribeSecretWithContext(ctx, describeSecretInput)
-		if err != nil {
-			return nil, err
-		}
-		log.Info("found metadata secret", "key", ref.Key, "output", descOutput)
-
-		jsonTags, err := util.SecretTagsToJSONString(descOutput.Tags)
-		if err != nil {
-			return nil, err
-		}
-		secretOut = &awssm.GetSecretValueOutput{
-			ARN:          descOutput.ARN,
-			CreatedDate:  descOutput.CreatedDate,
-			Name:         descOutput.Name,
-			SecretString: &jsonTags,
-			VersionId:    &ver,
-		}
-	} else {
-		var getSecretValueInput *awssm.GetSecretValueInput
-		if strings.HasPrefix(ver, "uuid/") {
-			versionID := strings.TrimPrefix(ver, "uuid/")
-			getSecretValueInput = &awssm.GetSecretValueInput{
-				SecretId:  &ref.Key,
-				VersionId: &versionID,
-			}
-		} else {
-			getSecretValueInput = &awssm.GetSecretValueInput{
-				SecretId:     &ref.Key,
-				VersionStage: &ver,
-			}
-		}
-		secretOut, err = sm.client.GetSecretValue(getSecretValueInput)
-		metrics.ObserveAPICall(constants.ProviderAWSSM, constants.CallAWSSMGetSecretValue, err)
-		var nf *awssm.ResourceNotFoundException
-		if errors.As(err, &nf) {
-			return nil, esv1beta1.NoSecretErr
-		}
-		if err != nil {
-			return nil, err
-		}
+	secretOut, err := sm.constructSecretValue(ctx, key, ver, ref.MetadataPolicy)
+	if err != nil {
+		return nil, err
 	}
+
 	sm.cache[cacheKey] = secretOut
 
 	return secretOut, nil
 }
 
-func (sm *SecretsManager) DeleteSecret(ctx context.Context, remoteRef esv1beta1.PushSecretRemoteRef) error {
-	secretName := remoteRef.GetRemoteKey()
+func (sm *SecretsManager) DeleteSecret(ctx context.Context, remoteRef esv1.PushSecretRemoteRef) error {
+	secretName := sm.prefix + remoteRef.GetRemoteKey()
 	secretValue := awssm.GetSecretValueInput{
 		SecretId: &secretName,
 	}
@@ -212,17 +182,36 @@ func (sm *SecretsManager) DeleteSecret(ctx context.Context, remoteRef esv1beta1.
 	return err
 }
 
-func (sm *SecretsManager) SecretExists(_ context.Context, _ esv1beta1.PushSecretRemoteRef) (bool, error) {
-	return false, fmt.Errorf("not implemented")
+func (sm *SecretsManager) SecretExists(ctx context.Context, pushSecretRef esv1.PushSecretRemoteRef) (bool, error) {
+	secretName := sm.prefix + pushSecretRef.GetRemoteKey()
+	secretValue := awssm.GetSecretValueInput{
+		SecretId: &secretName,
+	}
+	_, err := sm.client.GetSecretValueWithContext(ctx, &secretValue)
+	if err != nil {
+		return sm.handleSecretError(err)
+	}
+	return true, nil
 }
 
-func (sm *SecretsManager) PushSecret(ctx context.Context, secret *corev1.Secret, psd esv1beta1.PushSecretData) error {
-	if psd.GetSecretKey() == "" {
-		return fmt.Errorf("pushing the whole secret is not yet implemented")
+func (sm *SecretsManager) handleSecretError(err error) (bool, error) {
+	var aerr awserr.Error
+	if ok := errors.As(err, &aerr); !ok {
+		return false, err
+	}
+	if aerr.Code() == awssm.ErrCodeResourceNotFoundException {
+		return false, nil
+	}
+	return false, err
+}
+
+func (sm *SecretsManager) PushSecret(ctx context.Context, secret *corev1.Secret, psd esv1.PushSecretData) error {
+	value, err := utils.ExtractSecretData(psd, secret)
+	if err != nil {
+		return fmt.Errorf("failed to extract secret data: %w", err)
 	}
 
-	secretName := psd.GetRemoteKey()
-	value := secret.Data[psd.GetSecretKey()]
+	secretName := sm.prefix + psd.GetRemoteKey()
 	secretValue := awssm.GetSecretValueInput{
 		SecretId: &secretName,
 	}
@@ -305,7 +294,7 @@ func isManagedByESO(data *awssm.DescribeSecretOutput) bool {
 }
 
 // GetAllSecrets syncs multiple secrets from aws provider into a single Kubernetes Secret.
-func (sm *SecretsManager) GetAllSecrets(ctx context.Context, ref esv1beta1.ExternalSecretFind) (map[string][]byte, error) {
+func (sm *SecretsManager) GetAllSecrets(ctx context.Context, ref esv1.ExternalSecretFind) (map[string][]byte, error) {
 	if ref.Name != nil {
 		return sm.findByName(ctx, ref)
 	}
@@ -315,7 +304,7 @@ func (sm *SecretsManager) GetAllSecrets(ctx context.Context, ref esv1beta1.Exter
 	return nil, errors.New(errUnexpectedFindOperator)
 }
 
-func (sm *SecretsManager) findByName(ctx context.Context, ref esv1beta1.ExternalSecretFind) (map[string][]byte, error) {
+func (sm *SecretsManager) findByName(ctx context.Context, ref esv1.ExternalSecretFind) (map[string][]byte, error) {
 	matcher, err := find.New(*ref.Name)
 	if err != nil {
 		return nil, err
@@ -329,12 +318,16 @@ func (sm *SecretsManager) findByName(ctx context.Context, ref esv1beta1.External
 				ref.Path,
 			},
 		})
+
+		return sm.fetchWithBatch(ctx, filters, matcher)
 	}
 
 	data := make(map[string][]byte)
 	var nextToken *string
 
 	for {
+		// I put this into the for loop on purpose.
+		log.V(0).Info("using ListSecret to fetch all secrets; this is a costly operations, please use batching by defining a _path_")
 		it, err := sm.client.ListSecrets(&awssm.ListSecretsInput{
 			Filters:   filters,
 			NextToken: nextToken,
@@ -349,8 +342,7 @@ func (sm *SecretsManager) findByName(ctx context.Context, ref esv1beta1.External
 				continue
 			}
 			log.V(1).Info("aws sm findByName matches", "name", *secret.Name)
-			err = sm.fetchAndSet(ctx, data, *secret.Name)
-			if err != nil {
+			if err := sm.fetchAndSet(ctx, data, *secret.Name); err != nil {
 				return nil, err
 			}
 		}
@@ -362,7 +354,7 @@ func (sm *SecretsManager) findByName(ctx context.Context, ref esv1beta1.External
 	return data, nil
 }
 
-func (sm *SecretsManager) findByTags(ctx context.Context, ref esv1beta1.ExternalSecretFind) (map[string][]byte, error) {
+func (sm *SecretsManager) findByTags(ctx context.Context, ref esv1.ExternalSecretFind) (map[string][]byte, error) {
 	filters := make([]*awssm.Filter, 0)
 	for k, v := range ref.Tags {
 		filters = append(filters, &awssm.Filter{
@@ -387,35 +379,11 @@ func (sm *SecretsManager) findByTags(ctx context.Context, ref esv1beta1.External
 		})
 	}
 
-	data := make(map[string][]byte)
-	var nextToken *string
-	for {
-		log.V(1).Info("aws sm findByTag", "nextToken", nextToken)
-		it, err := sm.client.ListSecrets(&awssm.ListSecretsInput{
-			Filters:   filters,
-			NextToken: nextToken,
-		})
-		metrics.ObserveAPICall(constants.ProviderAWSSM, constants.CallAWSSMListSecrets, err)
-		if err != nil {
-			return nil, err
-		}
-		log.V(1).Info("aws sm findByTag found", "secrets", len(it.SecretList))
-		for _, secret := range it.SecretList {
-			err = sm.fetchAndSet(ctx, data, *secret.Name)
-			if err != nil {
-				return nil, err
-			}
-		}
-		nextToken = it.NextToken
-		if nextToken == nil {
-			break
-		}
-	}
-	return data, nil
+	return sm.fetchWithBatch(ctx, filters, nil)
 }
 
 func (sm *SecretsManager) fetchAndSet(ctx context.Context, data map[string][]byte, name string) error {
-	sec, err := sm.fetch(ctx, esv1beta1.ExternalSecretDataRemoteRef{
+	sec, err := sm.fetch(ctx, esv1.ExternalSecretDataRemoteRef{
 		Key: name,
 	})
 	if err != nil {
@@ -431,9 +399,9 @@ func (sm *SecretsManager) fetchAndSet(ctx context.Context, data map[string][]byt
 }
 
 // GetSecret returns a single secret from the provider.
-func (sm *SecretsManager) GetSecret(ctx context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) ([]byte, error) {
+func (sm *SecretsManager) GetSecret(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) ([]byte, error) {
 	secretOut, err := sm.fetch(ctx, ref)
-	if errors.Is(err, esv1beta1.NoSecretErr) {
+	if errors.Is(err, esv1.NoSecretErr) {
 		return nil, err
 	}
 	if err != nil {
@@ -488,7 +456,7 @@ func (sm *SecretsManager) escapeDotsIfRequired(currentRefProperty, payload strin
 }
 
 // GetSecretMap returns multiple k/v pairs from the provider.
-func (sm *SecretsManager) GetSecretMap(ctx context.Context, ref esv1beta1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
+func (sm *SecretsManager) GetSecretMap(ctx context.Context, ref esv1.ExternalSecretDataRemoteRef) (map[string][]byte, error) {
 	log.Info("fetching secret map", "key", ref.Key)
 	data, err := sm.GetSecret(ctx, ref)
 	if err != nil {
@@ -516,42 +484,58 @@ func (sm *SecretsManager) Close(_ context.Context) error {
 	return nil
 }
 
-func (sm *SecretsManager) Validate() (esv1beta1.ValidationResult, error) {
+func (sm *SecretsManager) Validate() (esv1.ValidationResult, error) {
 	// skip validation stack because it depends on the namespace
 	// of the ExternalSecret
 	if sm.referentAuth {
-		return esv1beta1.ValidationResultUnknown, nil
+		return esv1.ValidationResultUnknown, nil
 	}
 	_, err := sm.sess.Config.Credentials.Get()
 	if err != nil {
-		return esv1beta1.ValidationResultError, util.SanitizeErr(err)
+		return esv1.ValidationResultError, util.SanitizeErr(err)
 	}
-	return esv1beta1.ValidationResultReady, nil
+	return esv1.ValidationResultReady, nil
 }
 
-func (sm *SecretsManager) Capabilities() esv1beta1.SecretStoreCapabilities {
-	return esv1beta1.SecretStoreReadWrite
+func (sm *SecretsManager) Capabilities() esv1.SecretStoreCapabilities {
+	return esv1.SecretStoreReadWrite
 }
 
-func (sm *SecretsManager) createSecretWithContext(ctx context.Context, secretName string, psd esv1beta1.PushSecretData, value []byte) error {
-	secretPushFormat, err := utils.FetchValueFromMetadata(SecretPushFormatKey, psd.GetMetadata(), SecretPushFormatBinary)
+func (sm *SecretsManager) createSecretWithContext(ctx context.Context, secretName string, psd esv1.PushSecretData, value []byte) error {
+	mdata, err := sm.constructMetadataWithDefaults(psd.GetMetadata())
 	if err != nil {
-		return fmt.Errorf("failed to parse metadata: %w", err)
+		return fmt.Errorf("failed to parse push secret metadata: %w", err)
+	}
+
+	tags := []*awssm.Tag{
+		{
+			Key:   utilpointer.To(managedBy),
+			Value: utilpointer.To(externalSecrets),
+		},
+	}
+
+	for k, v := range mdata.Spec.Tags {
+		tags = append(tags, &awssm.Tag{
+			Key:   utilpointer.To(k),
+			Value: utilpointer.To(v),
+		})
 	}
 
 	input := &awssm.CreateSecretInput{
-		Name:         &secretName,
-		SecretBinary: value,
-		Tags: []*awssm.Tag{
-			{
-				Key:   utilpointer.To(managedBy),
-				Value: utilpointer.To(externalSecrets),
-			},
-		},
+		Name:               &secretName,
+		SecretBinary:       value,
+		Tags:               tags,
+		Description:        utilpointer.To(mdata.Spec.Description),
 		ClientRequestToken: utilpointer.To(initialVersion),
+		KmsKeyId:           utilpointer.To(mdata.Spec.KMSKeyID),
 	}
-	if secretPushFormat == SecretPushFormatString {
+	if mdata.Spec.SecretPushFormat == SecretPushFormatString {
 		input.SetSecretBinary(nil).SetSecretString(string(value))
+	}
+
+	err = input.Validate()
+	if err != nil {
+		return fmt.Errorf("failed to validate input: %w", err)
 	}
 
 	_, err = sm.client.CreateSecretWithContext(ctx, input)
@@ -560,16 +544,16 @@ func (sm *SecretsManager) createSecretWithContext(ctx context.Context, secretNam
 	return err
 }
 
-func (sm *SecretsManager) putSecretValueWithContext(ctx context.Context, secretInput awssm.DescribeSecretInput, awsSecret *awssm.GetSecretValueOutput, psd esv1beta1.PushSecretData, value []byte) error {
+func (sm *SecretsManager) putSecretValueWithContext(ctx context.Context, secretInput awssm.DescribeSecretInput, awsSecret *awssm.GetSecretValueOutput, psd esv1.PushSecretData, value []byte) error {
 	data, err := sm.client.DescribeSecretWithContext(ctx, &secretInput)
 	metrics.ObserveAPICall(constants.ProviderAWSSM, constants.CallAWSSMDescribeSecret, err)
 	if err != nil {
 		return err
 	}
 	if !isManagedByESO(data) {
-		return fmt.Errorf("secret not managed by external-secrets")
+		return errors.New("secret not managed by external-secrets")
 	}
-	if awsSecret != nil && bytes.Equal(awsSecret.SecretBinary, value) {
+	if awsSecret != nil && bytes.Equal(awsSecret.SecretBinary, value) || utils.CompareStringAndByteSlices(awsSecret.SecretString, value) {
 		return nil
 	}
 
@@ -594,4 +578,137 @@ func (sm *SecretsManager) putSecretValueWithContext(ctx context.Context, secretI
 	metrics.ObserveAPICall(constants.ProviderAWSSM, constants.CallAWSSMPutSecretValue, err)
 
 	return err
+}
+
+func (sm *SecretsManager) fetchWithBatch(ctx context.Context, filters []*awssm.Filter, matcher *find.Matcher) (map[string][]byte, error) {
+	data := make(map[string][]byte)
+	var nextToken *string
+
+	for {
+		it, err := sm.client.BatchGetSecretValueWithContext(ctx, &awssm.BatchGetSecretValueInput{
+			Filters:   filters,
+			NextToken: nextToken,
+		})
+		metrics.ObserveAPICall(constants.ProviderAWSSM, constants.CallAWSSMBatchGetSecretValue, err)
+		if err != nil {
+			return nil, err
+		}
+		log.V(1).Info("aws sm findByName found", "secrets", len(it.SecretValues))
+		for _, secret := range it.SecretValues {
+			if matcher != nil && !matcher.MatchName(*secret.Name) {
+				continue
+			}
+			log.V(1).Info("aws sm findByName matches", "name", *secret.Name)
+
+			sm.setSecretValues(secret, data)
+		}
+		nextToken = it.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+
+	return data, nil
+}
+
+func (sm *SecretsManager) setSecretValues(secret *awssm.SecretValueEntry, data map[string][]byte) {
+	if secret.SecretString != nil {
+		data[*secret.Name] = []byte(*secret.SecretString)
+	}
+	if secret.SecretBinary != nil {
+		data[*secret.Name] = secret.SecretBinary
+	}
+}
+
+func (sm *SecretsManager) constructSecretValue(ctx context.Context, key, ver string, metadataPolicy esv1.ExternalSecretMetadataPolicy) (*awssm.GetSecretValueOutput, error) {
+	if metadataPolicy == esv1.ExternalSecretMetadataPolicyFetch {
+		describeSecretInput := &awssm.DescribeSecretInput{
+			SecretId: &key,
+		}
+
+		descOutput, err := sm.client.DescribeSecretWithContext(ctx, describeSecretInput)
+		if err != nil {
+			return nil, err
+		}
+		log.Info("found metadata secret", "key", key, "output", descOutput)
+
+		jsonTags, err := util.SecretTagsToJSONString(descOutput.Tags)
+		if err != nil {
+			return nil, err
+		}
+		return &awssm.GetSecretValueOutput{
+			ARN:          descOutput.ARN,
+			CreatedDate:  descOutput.CreatedDate,
+			Name:         descOutput.Name,
+			SecretString: &jsonTags,
+			VersionId:    &ver,
+		}, nil
+	}
+
+	var getSecretValueInput *awssm.GetSecretValueInput
+	if strings.HasPrefix(ver, "uuid/") {
+		versionID := strings.TrimPrefix(ver, "uuid/")
+		getSecretValueInput = &awssm.GetSecretValueInput{
+			SecretId:  &key,
+			VersionId: &versionID,
+		}
+	} else {
+		getSecretValueInput = &awssm.GetSecretValueInput{
+			SecretId:     &key,
+			VersionStage: &ver,
+		}
+	}
+	secretOut, err := sm.client.GetSecretValue(getSecretValueInput)
+	metrics.ObserveAPICall(constants.ProviderAWSSM, constants.CallAWSSMGetSecretValue, err)
+	var (
+		nf *awssm.ResourceNotFoundException
+		ie *awssm.InvalidRequestException
+	)
+	if errors.As(err, &nf) {
+		return nil, esv1.NoSecretErr
+	}
+
+	if errors.As(err, &ie) && strings.Contains(ie.Error(), "was marked for deletion") {
+		return nil, esv1.NoSecretErr
+	}
+
+	return secretOut, err
+}
+
+func (sm *SecretsManager) constructMetadataWithDefaults(data *apiextensionsv1.JSON) (*metadata.PushSecretMetadata[PushSecretMetadataSpec], error) {
+	var (
+		meta *metadata.PushSecretMetadata[PushSecretMetadataSpec]
+		err  error
+	)
+
+	meta, err = metadata.ParseMetadataParameters[PushSecretMetadataSpec](data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse metadata: %w", err)
+	}
+
+	if meta == nil {
+		meta = &metadata.PushSecretMetadata[PushSecretMetadataSpec]{}
+	}
+
+	if meta.Spec.SecretPushFormat == "" {
+		meta.Spec.SecretPushFormat = SecretPushFormatBinary
+	} else if !slices.Contains([]string{SecretPushFormatBinary, SecretPushFormatString}, meta.Spec.SecretPushFormat) {
+		return nil, fmt.Errorf("invalid secret push format: %s", meta.Spec.SecretPushFormat)
+	}
+
+	if meta.Spec.Description == "" {
+		meta.Spec.Description = fmt.Sprintf("secret '%s:%s'", managedBy, externalSecrets)
+	}
+
+	if meta.Spec.KMSKeyID == "" {
+		meta.Spec.KMSKeyID = "alias/aws/secretsmanager"
+	}
+
+	if len(meta.Spec.Tags) > 0 {
+		if _, exists := meta.Spec.Tags[managedBy]; exists {
+			return nil, fmt.Errorf("error parsing tags in metadata: Cannot specify a '%s' tag", managedBy)
+		}
+	}
+
+	return meta, nil
 }

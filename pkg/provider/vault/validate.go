@@ -21,7 +21,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
+	esv1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1"
 	"github.com/external-secrets/external-secrets/pkg/utils"
 )
 
@@ -47,20 +47,20 @@ const (
 	errInvalidClientTLS       = "when provided, both ClientTLS.ClientCert and ClientTLS.SecretRef should be provided"
 )
 
-func (p *Provider) ValidateStore(store esv1beta1.GenericStore) (admission.Warnings, error) {
+func (p *Provider) ValidateStore(store esv1.GenericStore) (admission.Warnings, error) {
 	if store == nil {
-		return nil, fmt.Errorf(errInvalidStore)
+		return nil, errors.New(errInvalidStore)
 	}
 	spc := store.GetSpec()
 	if spc == nil {
-		return nil, fmt.Errorf(errInvalidStoreSpec)
+		return nil, errors.New(errInvalidStoreSpec)
 	}
 	if spc.Provider == nil {
-		return nil, fmt.Errorf(errInvalidStoreProv)
+		return nil, errors.New(errInvalidStoreProv)
 	}
 	vaultProvider := spc.Provider.Vault
 	if vaultProvider == nil {
-		return nil, fmt.Errorf(errInvalidVaultProv)
+		return nil, errors.New(errInvalidVaultProv)
 	}
 	if vaultProvider.Auth.AppRole != nil {
 		// check SecretRef for valid configuration
@@ -75,7 +75,7 @@ func (p *Provider) ValidateStore(store esv1beta1.GenericStore) (admission.Warnin
 					return nil, fmt.Errorf(errInvalidAppRoleRef, err)
 				}
 			} else { // we ran out of ways to get RoleID. return an appropriate error
-				return nil, fmt.Errorf(errInvalidAppRoleID)
+				return nil, errors.New(errInvalidAppRoleID)
 			}
 		}
 	}
@@ -97,7 +97,7 @@ func (p *Provider) ValidateStore(store esv1beta1.GenericStore) (admission.Warnin
 				return nil, fmt.Errorf(errInvalidJwtK8sSA, err)
 			}
 		} else {
-			return nil, fmt.Errorf(errJwtNoTokenSource)
+			return nil, errors.New(errJwtNoTokenSource)
 		}
 	}
 	if vaultProvider.Auth.Kubernetes != nil {
@@ -163,16 +163,16 @@ func (p *Provider) ValidateStore(store esv1beta1.GenericStore) (admission.Warnin
 	return nil, nil
 }
 
-func (c *client) Validate() (esv1beta1.ValidationResult, error) {
+func (c *client) Validate() (esv1.ValidationResult, error) {
 	// when using referent namespace we can not validate the token
 	// because the namespace is not known yet when Validate() is called
 	// from the SecretStore controller.
-	if c.storeKind == esv1beta1.ClusterSecretStoreKind && isReferentSpec(c.store) {
-		return esv1beta1.ValidationResultUnknown, nil
+	if c.storeKind == esv1.ClusterSecretStoreKind && isReferentSpec(c.store) {
+		return esv1.ValidationResultUnknown, nil
 	}
 	_, err := checkToken(context.Background(), c.token)
 	if err != nil {
-		return esv1beta1.ValidationResultError, fmt.Errorf(errInvalidCredentials, err)
+		return esv1.ValidationResultError, fmt.Errorf(errInvalidCredentials, err)
 	}
-	return esv1beta1.ValidationResultReady, nil
+	return esv1.ValidationResultReady, nil
 }
