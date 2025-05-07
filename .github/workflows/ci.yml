@@ -5,6 +5,7 @@ on:
     branches:
       - dodo
       - fix-ci-pipeline
+      - fix-ci-but-simple
       # - release-*
   # pull_request: {}
 
