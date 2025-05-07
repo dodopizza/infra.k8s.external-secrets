@@ -1,6 +1,8 @@
 module github.com/external-secrets/external-secrets
 
-go 1.22.1
+go 1.23.0
+
+toolchain go1.24.2
 
 require (
 	cloud.google.com/go/iam v1.2.0
@@ -41,7 +43,7 @@ require (
 	github.com/yandex-cloud/go-sdk v0.0.0-20250320143332-9cbcfc5de4ae
 	github.com/youmark/pkcs8 v0.0.0-20240424034433-3c2c7870ae76
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.33.0
+	golang.org/x/crypto v0.35.0
 	golang.org/x/oauth2 v0.22.0
 	google.golang.org/api v0.193.0
 	google.golang.org/genproto v0.0.0-20240903143218-8af14fe29dc1
