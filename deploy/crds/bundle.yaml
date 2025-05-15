@@ -5942,7 +5942,7 @@ spec:
                                   type: string
                               type: object
                           type: object
-                        folderId:
+                        folderID:
                           description: If provided sets the ability to get secrets by its name in the specified folder
                           type: string
                       required:
@@ -15802,7 +15802,7 @@ spec:
                                   type: string
                               type: object
                           type: object
-                        folderId:
+                        folderID:
                           description: If provided sets the ability to get secrets by its name in the specified folder
                           type: string
                       required:

@@ -36,7 +36,7 @@ type YandexCertificateManagerProvider struct {
 
 	//If provided sets the ability to get secrets by its name in the specified folder
 	// +optional
-	FolderID string `json:"folderId,omitempty"`
+	FolderID string `json:"folderID,omitempty"`
 
 	// Auth defines the information necessary to authenticate against Yandex Certificate Manager
 	Auth YandexCertificateManagerAuth `json:"auth"`
