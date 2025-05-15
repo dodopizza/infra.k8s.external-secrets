@@ -2,6 +2,30 @@ apiVersion: v1
 entries:
   external-secrets:
   - apiVersion: v2
+    appVersion: v0.10.4
+    created: "2025-05-15T13:57:54.422655277Z"
+    dependencies:
+    - condition: bitwarden-sdk-server.enabled
+      name: bitwarden-sdk-server
+      repository: oci://ghcr.io/external-secrets/charts
+      version: v0.3.1
+    description: External secret management for Kubernetes
+    digest: fcf213228cc5078cc507ac5063d646d4575929d775db7dba1bd417f058fcda63
+    home: https://github.com/external-secrets/external-secrets
+    icon: https://raw.githubusercontent.com/external-secrets/external-secrets/main/assets/eso-logo-large.png
+    keywords:
+    - kubernetes-external-secrets
+    - secrets
+    kubeVersion: '>= 1.19.0-0'
+    maintainers:
+    - email: kellinmcavoy@gmail.com
+      name: mcavoyk
+    name: external-secrets
+    type: application
+    urls:
+    - https://github.com/dodopizza/infra.k8s.external-secrets/releases/download/helm-chart-0.16.4/external-secrets-0.16.4.tgz
+    version: 0.16.4
+  - apiVersion: v2
     appVersion: v0.10.3
     created: "2025-05-15T13:36:51.068835536Z"
     dependencies:
@@ -92,4 +116,4 @@ entries:
     urls:
     - https://github.com/dodopizza/infra.k8s.external-secrets/releases/download/helm-chart-0.9.16/external-secrets-0.9.16.tgz
     version: 0.9.16
-generated: "2025-05-15T13:36:51.068854662Z"
+generated: "2025-05-15T13:57:54.422679381Z"
