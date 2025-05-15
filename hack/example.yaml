@@ -1,0 +1,64 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: certs
+
+---
+apiVersion: v1
+data:
+  certs-external-secrets-certs-authorized-key-secret: <Your Token>
+kind: Secret
+metadata:
+  name: certs-external-secrets-certs-authorized-key-secret
+  namespace: certs
+type: Opaque
+
+---
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: certs-store
+spec:
+  provider:
+    yandexcertificatemanager:
+      auth:
+        authorizedKeySecretRef:
+          key: certs-external-secrets-certs-authorized-key-secret
+          name: certs-external-secrets-certs-authorized-key-secret
+          namespace: certs
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: tls--wildcard--dodois-io
+  namespace: certs
+spec:
+  data:
+    - remoteRef:
+        conversionStrategy: Default
+        decodingStrategy: None
+        key: tls--wildcard--dodois-io
+        metadataPolicy: None
+        property: chain
+      secretKey: tls.crt
+    - remoteRef:
+        conversionStrategy: Default
+        decodingStrategy: None
+        key: tls--wildcard--dodois-io
+        metadataPolicy: None
+        property: privateKey
+      secretKey: tls.key
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: certs-store
+  target:
+    creationPolicy: Orphan
+    deletionPolicy: Retain
+    name: tls--wildcard--dodois-io
+    template:
+      engineVersion: v2
+      mergePolicy: Replace
+      type: kubernetes.io/tls

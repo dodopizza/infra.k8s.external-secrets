@@ -44,8 +44,21 @@ yq e '(.clusters[] | select(.name == "kind-kind").cluster.insecure-skip-tls-veri
 yq e 'del(.clusters[] | select(.name == "kind-kind").cluster."certificate-authority-data")' -i ~/.kube/config
 
 log "[~] Check connectivity"
-kubectl cluster-info --context kind-kind"
+kubectl cluster-info --context kind-kind
 
 log "[.] Prepared"
 
+
 log "[~] Run 'make manifests crds.install' to generate and apply CRDs"
+
+log "[~] Run 'make manifests' and 'make crds.install' to generate and apply CRDs"
+make manifests
+make crds.install
+
+log "[~] Run helm installations"
+helm repo add dodosecrets https://dodopizza.github.io/infra.k8s.external-secrets/
+helm repo update
+helm search repo dodosecrets
+
+log "[~] Everything is ready. Use 'make manifests' and 'make crds.install' to generate and apply CRDs"
+log "[~] Also check hack>example.yaml for example of installation"
