@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/devcontainers/go:1-1.24-bookworm
 
 USER root
 
-# must be amd64 or arm64
+# must be amd64 or arm64 
 ARG TARGETARCH
 
 # BASE
