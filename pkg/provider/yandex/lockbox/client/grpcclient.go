@@ -27,10 +27,12 @@ import (
 // Real/gRPC implementation of LockboxClient.
 type grpcLockboxClient struct {
 	lockboxPayloadClient api.PayloadServiceClient
+	lockboxSecretClient  api.SecretServiceClient
 }
 
 func NewGrpcLockboxClient(ctx context.Context, apiEndpoint string, authorizedKey *iamkey.Key, caCertificate []byte) (LockboxClient, error) {
 	conn, err := common.NewGrpcConnection(
+		// Required lockbox.payloadViewer role
 		ctx,
 		apiEndpoint,
 		"lockbox-payload", // taken from https://api.cloud.yandex.net/endpoints
@@ -40,10 +42,73 @@ func NewGrpcLockboxClient(ctx context.Context, apiEndpoint string, authorizedKey
 	if err != nil {
 		return nil, err
 	}
-	return &grpcLockboxClient{api.NewPayloadServiceClient(conn)}, nil
+	conn2, err := common.NewGrpcConnection(
+		// Required lockbox.viewer role
+		ctx,
+		apiEndpoint,
+		"lockbox", // taken from https://api.cloud.yandex.net/endpoints
+		authorizedKey,
+		caCertificate,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &grpcLockboxClient{
+		api.NewPayloadServiceClient(conn),
+		api.NewSecretServiceClient(conn2),
+	}, nil
 }
 
-func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, secretID, versionID string) ([]*api.Payload_Entry, error) {
+func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, folderID, secretIDOrName, versionID string) ([]*api.Payload_Entry, error) {
+	// If the folderID is provided in the SecretStore, we can attempt to retrieve the secret by its name
+	if folderID != "" {
+		payloadEntry, err := c.GetSecretByName(ctx, iamToken, folderID, secretIDOrName, versionID)
+		if err != nil {
+			return nil, err
+		}
+
+		return payloadEntry, nil
+	}
+
+	// If the folderID is not provided in the SecretStore, we can attempt to retrieve the secret by its ID
+	payloadEntry, err := c.GetSecretByID(ctx, iamToken, secretIDOrName, versionID)
+	if err != nil {
+		return nil, err
+	}
+
+	return payloadEntry, nil
+}
+
+func (c *grpcLockboxClient) GetSecretByName(ctx context.Context, iamToken, folderID, secretIDOrName, versionID string) ([]*api.Payload_Entry, error) {
+	response, err := c.lockboxPayloadClient.GetEx(
+		ctx,
+		&api.GetExRequest{
+			Identifier: &api.GetExRequest_FolderAndName{
+				FolderAndName: &api.FolderAndName{
+					FolderId:   folderID,
+					SecretName: secretIDOrName,
+				},
+			},
+			VersionId: versionID,
+		},
+		grpc.PerRPCCredentials(common.PerRPCCredentials{IamToken: iamToken}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	// Convert the response of GetEx method to api.Payload
+	payload := &api.Payload{VersionId: response.VersionId}
+	for key, value := range response.Entries {
+		payload.Entries = append(payload.Entries, &api.Payload_Entry{
+			Key:   key,
+			Value: &api.Payload_Entry_TextValue{TextValue: string(value)},
+		})
+	}
+	return payload.Entries, nil
+}
+
+func (c *grpcLockboxClient) GetSecretByID(ctx context.Context, iamToken, secretID, versionID string) ([]*api.Payload_Entry, error) {
+	// Try to get the secret by ID
 	payload, err := c.lockboxPayloadClient.Get(
 		ctx,
 		&api.GetPayloadRequest{
@@ -55,5 +120,6 @@ func (c *grpcLockboxClient) GetPayloadEntries(ctx context.Context, iamToken, sec
 	if err != nil {
 		return nil, err
 	}
+
 	return payload.Entries, nil
 }

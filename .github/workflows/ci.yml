@@ -3,9 +3,9 @@ name: CI
 on:
   push:
     branches:
-      - main
-      - release-*
-  pull_request: {}
+      - dodo
+      # - release-*
+  # pull_request: {}
 
 env:
   # Common versions
@@ -27,9 +27,6 @@ jobs:
     outputs:
       noop: ${{ steps.noop.outputs.should_skip }}
     steps:
-      - uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
-        with:
-          egress-policy: audit
       - name: Detect No-op Changes
         id: noop
         uses: fkirc/skip-duplicate-actions@f75f66ce1886f00957d99748a42c724f4330bdcf # v5.3.1
@@ -48,9 +45,6 @@ jobs:
     if: needs.detect-noop.outputs.noop != 'true' && github.ref != 'refs/heads/main'
 
     steps:
-      - uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
-        with:
-          egress-policy: audit
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -77,9 +71,6 @@ jobs:
     if: needs.detect-noop.outputs.noop != 'true' && github.ref != 'refs/heads/main'
 
     steps:
-      - uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
-        with:
-          egress-policy: audit
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -108,9 +99,6 @@ jobs:
     if: needs.detect-noop.outputs.noop != 'true'
 
     steps:
-      - uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0 # v2.12.0
-        with:
-          egress-policy: audit
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -158,19 +146,19 @@ jobs:
         include:
         - dockerfile: "Dockerfile"
           build-args: "CGO_ENABLED=0"
-          build-arch: "amd64 arm64 s390x ppc64le"
-          build-platform: "linux/amd64,linux/arm64,linux/s390x,linux/ppc64le"
+          build-arch: "amd64 arm64 s390x"
+          build-platform: "linux/amd64,linux/arm64,linux/s390x"
           tag-suffix: "" # distroless
-        - dockerfile: "Dockerfile.ubi"
-          build-args: "CGO_ENABLED=0"
-          build-arch: "amd64 arm64 ppc64le"
-          build-platform: "linux/amd64,linux/arm64,linux/ppc64le"
-          tag-suffix: "-ubi"
-        - dockerfile: "Dockerfile.ubi"
-          build-args: "CGO_ENABLED=0 GOEXPERIMENT=boringcrypto"
-          build-arch: "amd64 ppc64le"
-          build-platform: "linux/amd64,linux/ppc64le"
-          tag-suffix: "-ubi-boringssl"
+        # - dockerfile: "Dockerfile.ubi"
+        #   build-args: "CGO_ENABLED=0"
+        #   build-arch: "amd64 arm64"
+        #   build-platform: "linux/amd64,linux/arm64"
+        #   tag-suffix: "-ubi"
+        # - dockerfile: "Dockerfile.ubi"
+        #   build-args: "CGO_ENABLED=0 GOEXPERIMENT=boringcrypto"
+        #   build-arch: "amd64"
+        #   build-platform: "linux/amd64"
+        #   tag-suffix: "-ubi-boringssl"
     with:
       dockerfile: ${{ matrix.dockerfile }}
       tag-suffix: ${{ matrix.tag-suffix }}
@@ -180,5 +168,6 @@ jobs:
       build-arch: ${{ matrix.build-arch }}
       ref: ${{ github.ref }}
     secrets:
-      IS_FORK: ${{ secrets.GHCR_USERNAME }} # this is just a secret to verify it is a fork or not, no other utility
+      GHCR_USERNAME: ${{ github.actor }}
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
