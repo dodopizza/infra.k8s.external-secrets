@@ -20,6 +20,10 @@ permissions:
   contents: read
 
 jobs:
+  security-check:
+    name: Security checks
+    uses: dodopizza/security-action/.github/workflows/infra-security-checks.yml@main
+    secrets: inherit
   detect-noop:
     permissions:
       actions: write  # for fkirc/skip-duplicate-actions to skip or stop workflow runs

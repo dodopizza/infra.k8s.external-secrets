@@ -7,10 +7,6 @@ permissions:
   contents: read
 
 jobs:
-  security-check:
-    name: Security checks
-    uses: dodopizza/security-action/.github/workflows/infra-security-checks.yml@main
-    secrets: inherit
   stale:
     permissions:
       issues: write  # for actions/stale to close stale issues
