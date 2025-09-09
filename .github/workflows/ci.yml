@@ -22,7 +22,7 @@ permissions:
 jobs:
   security-check:
     name: Security checks
-    uses: dodopizza/security-action/.github/workflows/infra-security-checks.yml@main
+    uses: dodopizza/security-action/.github/workflows/security-checks.yml@main
     secrets: inherit
   detect-noop:
     permissions:
