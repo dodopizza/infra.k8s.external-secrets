@@ -1,0 +1,9 @@
+# GitLeaks Configuration
+# This is a clean template for GitLeaks configuration, using default rules.
+
+title = "Company GitLeaks Configuration"
+
+[extend]
+useDefault = true
+
+# You can add custom rules or settings below if necessary
